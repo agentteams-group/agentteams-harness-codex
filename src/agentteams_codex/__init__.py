@@ -1,0 +1,1 @@
+"""AgentTeams Codex Harness adapter."""
