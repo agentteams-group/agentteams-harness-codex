@@ -19,7 +19,9 @@ Coverage: provisioning/health, native MCP/model calls, two-turn memory, outbox u
 
 The forced replacement recovered both the remembered token and a workspace file in 321.69 seconds, including the Controller's normal five-minute reconciliation interval. The collaboration rerun completed in 16.67 seconds and verified a fresh Worker answer before counting the Leader result.
 
-`tests/project_e2e.py` additionally checks durable Project/Task delegation, structured submission and Leader acceptance against the authoritative Controller workflow API. Its result is reported separately from the lightweight collaboration suite.
+`tests/project_e2e.py` additionally checks durable Project/Task delegation, structured submission and Leader acceptance against the authoritative Controller workflow API. Project `codex-dag-1794242250` and task `task1` reached `completed`; submission `b6dc732ef4ed450dad8948fe2a97ea7d` was accepted and the stored result file contained `323`.
+
+This supplemental workflow required **one explicit administrator correction**: the model skipped `ack_task`, so the Controller correctly refused its direct `assigned -> submitted` commit. After the administrator asked the Worker to read its task-execution Skill, acknowledge first and verify synchronization, the Worker committed `in_progress -> submitted` and the Leader accepted/completed the project. The final checker was also corrected to follow the actual deliverable path in task metadata instead of assuming a fixed filename. This proves the controlled workflow and its state/artifact results; it does **not** establish unattended project execution reliability for this model. The rerun prompt now states the acknowledgement requirement explicitly.
 
 ## Regression results
 
@@ -47,12 +49,12 @@ Existing failures are retained rather than hidden:
 - The Ruby transition-table smoke reports `failed to publish task files to shared storage` in both the modified checkout and clean main in the same Linux environment.
 - On macOS, OpenClaw bundle syntax and four QwenPaw entrypoint tests failed in both relevant clean-base comparisons. Linux cleared those platform-dependent failures. An already patched QwenPaw package was replaced with pristine CI-pinned 2.2.1 before the final 439-test run.
 
-The regression result is consequently **not an all-green claim for the repository**.
+These are local-environment regression results, including failures observed on the untouched base. The hosted AT TeamHarness, QwenPaw, Controller and other regression jobs subsequently passed; image build jobs were still running at the last check. The regression result is consequently **not an all-green claim for every local and hosted job**.
 
 ## Boundaries
 
 - Kubernetes is covered by backend unit tests and real API-server envtest; real Kubernetes Pods, Sandbox service, cloud OSS/RRSA and multi-architecture registry pulls were not exercised.
-- The image build and amd64/arm64 publication workflow are independent of AT releases. No public image release or successful hosted CI run is implied by a local image build.
+- The image build and amd64/arm64 publication workflow are independent of AT releases. [Harness hosted CI](https://github.com/agentteams-group/agentteams-harness-codex/actions/runs/42656829492) passed its host tests and actual Linux AMD64 image tests; local live tests used ARM64. No multi-architecture registry manifest or public image release has been published.
 - Approval acceptance/rejection, question responses, event correlation, unauthorized controls, duplicate delivery and uncertain-turn recovery have deterministic protocol tests. Live cancellation/steering are separate actual-model tests.
 - Matrix E2EE, DingTalk, AgentSpec packages, extra AT Skill registry packages and legacy SSE MCP are unsupported and are not counted as accepted features. Dashboard-specific Codex history/approval UI is outside this PoC.
 - Matrix delivery retries reuse the persisted answer. A crash during uncertain model/tool execution does not automatically replay the operation; this is not an exactly-once shell/MCP guarantee.

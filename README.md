@@ -79,6 +79,10 @@ AT_SOURCE=../AgentTeams \
 AT_TEST_CONTROLLER=codex-poc-controller \
 AT_CODEX_IMAGE=agentteams/codex-harness:local-YYYYmmddHHMMSS \
 python3 tests/e2e.py
+
+# Additional durable Project/Task check after the Team is ready:
+AT_SOURCE=../AgentTeams AT_TEST_CONTROLLER=codex-poc-controller \
+python3 tests/project_e2e.py
 ```
 
 The live suite covers Controller provisioning, Matrix/model/MCP calls, multi-turn context, file ingress/egress, container replacement, cancellation, steering and Leader/Worker roles. It writes results to the ignored `artifacts/` directory. See `docs/acceptance.md` for measured results and remaining verification gaps.
