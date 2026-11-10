@@ -1,0 +1,32 @@
+name: Codex Harness tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: harness
+      - uses: actions/checkout@v4
+        with:
+          repository: agentscope-ai/AgentTeams
+          ref: 41ef2358abc2af7519356d1cd5b9f72392f70af6
+          path: at
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -e ./harness
+      - run: make -C harness test AT_SOURCE=${{ github.workspace }}/at
+      - run: bash -n harness/scripts/entrypoint.sh
+      - name: Test the actual container Python and transport assets
+        run: |
+          docker build --build-context at=./at -t codex-harness-test ./harness
+          docker run --rm --entrypoint /opt/venv/bin/python3 \
+            -e AT_SOURCE=/opt/agentteams/transport \
+            -v "${{ github.workspace }}/harness/tests:/tests:ro" \
+            codex-harness-test -m unittest discover -s /tests -v

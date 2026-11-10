@@ -1,13 +1,88 @@
-# agentteams-harness-codex
+# AgentTeams Codex Harness
 
-AgentTeams integration harness for Codex Harness.
+Run the unmodified Codex App Server as an AgentTeams-managed runtime. AT owns the member lifecycle, Matrix identity and storage; this adapter owns the Codex process, configuration, event journal and native session snapshots. Leader and Worker are roles of the same runtime.
 
-This repository is intended to host runtime integration code, container packaging, and compatibility tests for AgentTeams.
+Status: experimental PoC. The integration requires the AT `codex` runtime registration change. Codex CLI is pinned to `0.143.0`; AT transport and TeamHarness build inputs are pinned to `41ef2358abc2af7519356d1cd5b9f72392f70af6`.
 
-Leader and Worker are AgentTeams roles. Role support depends on the runtime adapter and must be verified before use.
+## Build independently
 
-## Status
+```sh
+make build VERSION=v0.1.0
+# Test against a local AT checkout instead of the pinned remote input:
+make build AT_CONTEXT=../AgentTeams VERSION=local-YYYYmmddHHMMSS
+```
 
-Repository scaffold only; implementation planned. No runtime implementation or container image is published from this repository yet.
+BuildKit supplies the `at` named context. There is no dependency on an adjacent checkout in the default build. The image consumes the existing Matrix transport/file helpers, shared shell libraries and TeamHarness from that immutable AT commit. It does not fork or patch Codex. `make push` publishes amd64/arm64 images; set `IMAGE` to your registry. Pin an independently released image when configuring AT.
 
-See the [AgentTeams main repository](https://github.com/agentscope-ai/AgentTeams) for the current implementation.
+## Create a member
+
+```yaml
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: codex-dev
+spec:
+  runtime: codex
+  model: gpt-5.3-codex
+  image: ghcr.io/agentteams-group/agentteams-harness-codex:v0.1.0
+```
+
+The image above is the intended publication location, not a claim that v0.1.0 has been published. A Team can reference this resource as its Leader or Worker. The Controller projects `runtime.yaml` and issues Matrix, storage and model-gateway credentials. The model endpoint must implement the Responses API, including streamed tool calls; Chat Completions compatibility alone is insufficient.
+
+The adapter reads the projected model, gateway route, inline identity/instructions, role and MCP servers before each turn. TeamHarness Skills are filtered by role. Normal replies return directly to the current Matrix room; the TeamHarness MCP server enforces its existing role permissions. Team task rooms and valid `PROJECT_REQUESTED` self triggers are supported.
+
+## Execution and recovery
+
+- Each Matrix room maps to a separate persistent Codex thread.
+- Incoming events and the Matrix cursor are journaled before acknowledgement. Delivery retries reuse a deterministic Matrix transaction key and a saved answer, without repeating the model/tool turn.
+- Incoming files/images are saved in `workspace/inbox/`. Changed files under `workspace/outbox/` are uploaded to Matrix and object storage.
+- Native sessions and consistent SQLite backups are checkpointed after the App Server exits. Authentication files are excluded. The image restores snapshots on container replacement.
+- A turn interrupted before its result is safely saved is not automatically replayed. Its requester receives a recovery message and can send new input. This avoids claiming exactly-once shell/MCP execution across crashes.
+- `/healthz` reports recent Matrix sync health and whether a turn is active.
+
+## Human control
+
+In the active room, the requesting human or Team admin can send:
+
+```text
+/cancel
+/steer Additional instructions for the current turn
+/approve REQUEST_ID
+/reject REQUEST_ID
+/answer REQUEST_ID Your answer
+```
+
+Control messages from other Agents are rejected. Pending approval IDs expire when the turn or App Server ends. New messages without a control command are queued as new turns. Use `CODEX_APPROVAL_POLICY=on-request` for interactive approvals; the default `never` executes only within the configured sandbox and cannot escalate it. The default sandbox is `workspace-write`. On a dedicated disposable container without nested sandbox support, explicitly set `CODEX_SANDBOX_MODE=danger-full-access` to rely on container isolation; do not mount the Docker socket or unrestricted host directories into that container.
+
+## Model configuration
+
+By default, the adapter uses the Controller-projected gateway URL and gateway key. `CODEX_BASE_URL` and `CODEX_GATEWAY_KEY` are explicit deployment overrides. Keep real keys in deployment secrets, not this repository.
+
+For a trusted developer-only ChatGPT-account test, set `CODEX_AUTH_MODE=chatgpt` and mount a credentials file at `CODEX_AUTH_FILE`. The entrypoint copies it to the private Codex state directory; snapshots exclude it. Model catalog entries do not establish account entitlement: a completed inference turn does.
+
+## Current limits
+
+- Matrix E2EE, DingTalk transport, AgentSpec packages and legacy SSE MCP are not supported. Unsupported package/SSE configuration fails explicitly.
+- Execution is sequential per member. Use multiple members for parallel work.
+- Codex-specific session/history and approval UI integration in the AT Dashboard is outside this adapter; Matrix is the control interface.
+- Skills from the TeamHarness bundle are available. Additional AT Skill registry/package distribution needs a separate compatibility implementation.
+- App Server is experimental upstream; re-run compatibility tests before changing the pinned Codex version.
+
+## Tests
+
+```sh
+python3 -m pip install -e .
+make test AT_SOURCE=../AgentTeams
+
+# Only against a disposable codex-poc-* deployment:
+AT_SOURCE=../AgentTeams \
+AT_TEST_CONTROLLER=codex-poc-controller \
+AT_CODEX_IMAGE=agentteams/codex-harness:local-YYYYmmddHHMMSS \
+python3 tests/e2e.py
+
+# Additional durable Project/Task check after the Team is ready:
+AT_SOURCE=../AgentTeams AT_TEST_CONTROLLER=codex-poc-controller \
+python3 tests/project_e2e.py
+```
+
+The live suite covers Controller provisioning, Matrix/model/MCP calls, multi-turn context, file ingress/egress, container replacement, cancellation, steering and Leader/Worker roles. It writes results to the ignored `artifacts/` directory. See `docs/acceptance.md` for measured results and remaining verification gaps.
