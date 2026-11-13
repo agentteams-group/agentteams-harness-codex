@@ -27,6 +27,24 @@ from agentteams_codex.bridge import (
 
 
 class StateTests(unittest.TestCase):
+    def test_read_checkpoint_requires_native_user_input_and_a_successful_snapshot(self):
+        bridge = Bridge.__new__(Bridge)
+        bridge.journal = Mock()
+        bridge.persist_codex = Mock()
+        client = Mock()
+        client.request.return_value = {"thread": {"turns": [{"id": "turn", "items": []}]}}
+        record = {}
+        bridge.checkpoint_input(client, "thread", "turn", record)
+        self.assertNotIn("input_checkpointed", record)
+        client.request.return_value["thread"]["turns"][0]["items"] = [{"type": "userMessage"}]
+        bridge.persist_codex.side_effect = OSError("checkpoint unavailable")
+        bridge.checkpoint_input(client, "thread", "turn", record)
+        self.assertNotIn("input_checkpointed", record)
+        bridge.persist_codex.side_effect = None
+        bridge.checkpoint_input(client, "thread", "turn", record)
+        self.assertTrue(record["input_checkpointed"])
+        bridge.journal.save.assert_called_once()
+
     def test_only_valid_cross_session_self_trigger_bypasses_self_filter(self):
         event = {
             "type": "m.room.message",

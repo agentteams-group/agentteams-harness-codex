@@ -181,9 +181,9 @@ class Bridge:
         if not self.rooms:
             raise ValueError("runtime.yaml has no Matrix rooms")
 
-    def persist_codex(self):
+    def persist_codex(self, *, include_workspace=True):
         prefix = os.getenv("AGENTTEAMS_STORAGE_PREFIX")
-        if prefix:
+        if prefix and include_workspace:
             mc(
                 "mirror",
                 str(self.workspace) + "/",
@@ -197,6 +197,19 @@ class Bridge:
         snapshot_codex(self.home, path)
         if prefix:
             mc("cp", str(path), f"{prefix}/agents/{self.name}/runtime/{path.name}")
+
+    def checkpoint_input(self, client, thread_id, turn_id, record):
+        if record.get("input_checkpointed"):
+            return
+        try:
+            thread = client.request("thread/read", {"threadId": thread_id, "includeTurns": True})["thread"]
+            if not any(turn.get("id") == turn_id and any(item.get("type") == "userMessage" for item in turn.get("items", [])) for turn in thread.get("turns", [])):
+                return
+            self.persist_codex(include_workspace=False)
+        except (CodexError, OSError, subprocess.SubprocessError, KeyError):
+            return
+        record["input_checkpointed"] = True
+        self.journal.save()
 
     def reply(self, event, text, suffix, approval=None):
         if approval:
@@ -374,6 +387,7 @@ class Bridge:
                 image,
             )
             record["turn_id"] = turn["id"]
+            self.checkpoint_input(client, thread_id, turn["id"], record)
             self.active = {
                 "event": event,
                 "thread_id": thread_id,
@@ -387,6 +401,7 @@ class Bridge:
             last_progress = {}
             try:
                 while not self.stop.is_set():
+                    self.checkpoint_input(client, thread_id, turn["id"], record)
                     if time.monotonic() > deadline:
                         client.control("turn/interrupt", thread_id, turn["id"])
                         raise TimeoutError("Codex task timed out")
