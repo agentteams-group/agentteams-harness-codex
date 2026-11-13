@@ -57,6 +57,7 @@ class InteractionTests(unittest.TestCase):
             bridge.plugin = root
             bridge.config = {}
             bridge.agent_ids = set()
+            bridge.rooms = {"!room:matrix": "team"}
             bridge.journal = Journal(root / "journal.json")
             bridge.controls = queue.Queue()
             bridge.stop = threading.Event()
