@@ -253,7 +253,7 @@ class Bridge:
             verb = "/redirect" if control["action"] == "steer" else "/cancel"
             argument = body
         if verb not in {"/cancel", "/steer", "/approve", "/reject", "/answer"}:
-            if verb != "/redirect":
+            if verb != "/redirect" or control is None:
                 return False
         active = self.active
         admin = self.config.get("team", {}).get("admin", {}).get("matrixUserId")
@@ -531,6 +531,14 @@ class Bridge:
                                         })
                             self.reply(source, "Codex control accepted.", "control")
                         except (ValueError, CodexError) as error:
+                            if verb == "/redirect":
+                                # Completion can win the race with interrupt.
+                                # Keep the accepted supplement as a normal
+                                # follow-up in the same native thread.
+                                pending = self.journal.data["events"][source["event_id"]]
+                                pending["event"]["control"] = False
+                                pending["status"] = "queued"
+                                self.journal.save()
                             self.reply(source, str(error), "control")
                     try:
                         message = client.next_event(timeout=1)
