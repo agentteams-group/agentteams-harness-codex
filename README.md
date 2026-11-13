@@ -2,6 +2,11 @@
 
 Run the unmodified Codex App Server as an AgentTeams-managed runtime. AT owns the member lifecycle, Matrix identity and storage; this adapter owns the Codex process, configuration, event journal and native session snapshots. Leader and Worker are roles of the same runtime.
 
+Native `requestUserInput` requests render as inline Dashboard question cards.
+Structured answers preserve each question ID and selected or custom answer;
+only the requesting human or team admin can answer the active request. An old
+card cannot answer a later turn that reuses an App Server request ID.
+
 Status: experimental PoC. The integration requires the AT `codex` runtime registration change. Codex CLI is pinned to `0.143.0`; AT transport and TeamHarness build inputs are pinned to `41ef2358abc2af7519356d1cd5b9f72392f70af6`.
 
 ## Build independently

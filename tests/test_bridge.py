@@ -6,6 +6,7 @@ import sqlite3
 import sys
 import tarfile
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -24,6 +25,7 @@ from agentteams_codex.bridge import (
     restore_codex,
     actionable_events,
 )
+from agentteams_codex.client import CodexError
 
 
 class StateTests(unittest.TestCase):
@@ -44,6 +46,35 @@ class StateTests(unittest.TestCase):
         bridge.checkpoint_input(client, "thread", "turn", record)
         self.assertTrue(record["input_checkpointed"])
         bridge.journal.save.assert_called_once()
+
+    def test_supplement_is_not_lost_when_completion_wins_interrupt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bridge = Bridge.__new__(Bridge)
+            bridge.workspace = bridge.home = bridge.plugin = Path(temporary)
+            bridge.runtime_path = Path(temporary) / "runtime.yaml"
+            bridge.runtime_path.write_text("member:\n  runtime: codex\n")
+            bridge.config = {}
+            bridge.journal = Journal(Path(temporary) / "journal.json")
+            bridge.controls = queue.Queue()
+            bridge.stop = threading.Event()
+            bridge.pending_requests = {}
+            bridge.reply = Mock()
+            bridge.direct_member = Mock(return_value=False)
+            event = {"event_id": "$original", "room_id": "!dm", "sender": "@human:test", "body": "original", "kind": "text"}
+            supplement = {**event, "event_id": "$supplement", "body": "additional input", "control": True}
+            bridge.journal.ingest([event, supplement], "cursor")
+            bridge.controls.put((supplement, "/redirect", "additional input", "thread-1", "turn-1"))
+            with patch("agentteams_codex.bridge.prepare", return_value=("model", "instructions")), patch("agentteams_codex.bridge.Client") as factory:
+                client = factory.return_value.__enter__.return_value
+                client.open_thread.return_value = {"id": "thread-1", "turns": []}
+                client.start.return_value = {"id": "turn-1"}
+                client.control.side_effect = CodexError("turn already completed")
+                client.next_event.return_value = {"method": "turn/completed", "params": {"turn": {"id": "turn-1", "status": "completed"}}}
+                bridge.run_turn(event, bridge.journal.data["events"]["$original"])
+            pending = Journal(bridge.journal.path).data["events"]["$supplement"]
+            self.assertEqual(pending["status"], "queued")
+            self.assertFalse(pending["event"]["control"])
+            self.assertEqual(pending["event"]["body"], "additional input")
 
     def test_only_valid_cross_session_self_trigger_bypasses_self_filter(self):
         event = {
@@ -172,6 +203,7 @@ class StateTests(unittest.TestCase):
         bridge.reply = Mock()
         bridge.active = {"event": {"room_id": "!one", "sender": "@human:matrix"}}
         event = {"body": "/cancel", "room_id": "!one", "sender": "@other-agent:matrix"}
+        self.assertFalse(bridge.handle_control({**event, "body": "/redirect ordinary text"}))
         self.assertTrue(bridge.handle_control(event))
         self.assertTrue(bridge.controls.empty())
         bridge.handle_control({**event, "sender": "@human:matrix", "room_id": "!other"})
