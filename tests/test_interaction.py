@@ -34,14 +34,14 @@ for line in sys.stdin:
  elif m["method"]=="thread/start": result={"thread":{"id":"thread-1"}}
  elif m["method"]=="turn/start":
   result={"turn":{"id":"turn-1"}}
-  send({"id":"human-request","method":METHOD,"params":{"threadId":"thread-1","turnId":"turn-1","command":"printf approved","questions":[{"id":"q","question":"Choose"}]}})
+  send({"id":"human-request","method":METHOD,"params":{"threadId":"thread-1","turnId":"turn-1","command":"printf approved","questions":QUESTIONS}})
  else: result={}
  send({"id":m["id"],"result":result})
 """
 
 
 class InteractionTests(unittest.TestCase):
-    def run_case(self, method, command, stale_context=False):
+    def run_case(self, method, command, stale_context=False, questions=None, responses=None):
         with (
             tempfile.TemporaryDirectory() as temporary,
             patch.dict(os.environ, {}, clear=True),
@@ -63,6 +63,7 @@ class InteractionTests(unittest.TestCase):
             bridge.stop = threading.Event()
             bridge.pending_requests = {}
             bridge.active = None
+            bridge.matrix = Mock()
             event = {
                 "event_id": "$request",
                 "sender": "@human:matrix",
@@ -79,6 +80,21 @@ class InteractionTests(unittest.TestCase):
 
             bridge.reply = Mock(side_effect=respond)
 
+            def respond_card(_room, content, _transaction):
+                card = content["org.agentteams.run"]["blocks"][0]
+                self.assertEqual(card["requested_of"], event["sender"])
+                self.assertNotIn("/answer", content["body"])
+                if responses is None:
+                    bridge.handle_control({**event, "body": command})
+                else:
+                    answer = {"confirmation_id": card["confirmation_id"], "responses": responses}
+                    bridge.handle_control({**event, "body": "已提交选择", "answer": {**answer, "confirmation_id": "old-card"}})
+                    self.assertTrue(bridge.controls.empty())
+                    bridge.handle_control({**event, "sender": "@intruder:matrix", "body": "已提交选择", "answer": answer})
+                    self.assertTrue(bridge.controls.empty())
+                    bridge.handle_control({**event, "body": "已提交选择", "answer": answer})
+            bridge.matrix.send_content.side_effect = respond_card
+
             def factory(*args, **kwargs):
                 return Client(
                     *args,
@@ -86,7 +102,7 @@ class InteractionTests(unittest.TestCase):
                         sys.executable,
                         "-u",
                         "-c",
-                        "METHOD=" + repr(method) + "\n" + FAKE,
+                        "METHOD=" + repr(method) + "\nQUESTIONS=" + repr(questions or [{"id": "q", "question": "Choose"}]) + "\n" + FAKE,
                     ],
                     **kwargs,
                 )
@@ -149,6 +165,13 @@ class InteractionTests(unittest.TestCase):
         self.assertEqual(args[1]["org.agentteams.approval"], approval)
         self.assertEqual(args[1]["m.relates_to"]["m.in_reply_to"]["event_id"], "$turn")
         bridge.matrix.send_text.assert_not_called()
+
+    def test_question_card_returns_each_exact_answer_without_slash_commands(self):
+        self.assertEqual(self.run_case("item/tool/requestUserInput", "", questions=[
+            {"id": "choice", "question": "选一个", "options": [{"label": "甲"}, {"label": "乙"}]},
+            {"id": "free", "question": "补充内容"},
+        ], responses=[{"id": "choice", "selected": ["乙"]}, {"id": "free", "selected": [], "custom": "补充说明"}]),
+            {"answers": {"choice": {"answers": ["乙"]}, "free": {"answers": ["补充说明"]}}})
 
     def test_only_requesting_human_or_admin_can_resolve(self):
         bridge = Bridge.__new__(Bridge)
