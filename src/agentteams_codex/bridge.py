@@ -1,6 +1,7 @@
 """Durable Matrix ingress and Codex execution, using pinned AT transport assets."""
 
 import json
+import hashlib
 from contextlib import closing
 import os
 from pathlib import Path
@@ -39,6 +40,7 @@ from matrix_bridge import (
 
 def actionable_events(payload, rooms, user_id, agents):
     events = matrix_events(payload, rooms, user_id, agents)
+    by_id = {event["event_id"]: event for event in events}
     # TeamHarness uses an authenticated same-agent event to continue Project
     # Work in a task room. Ordinary self messages must remain suppressed.
     for room_id, room in payload.get("rooms", {}).get("join", {}).items():
@@ -46,6 +48,8 @@ def actionable_events(payload, rooms, user_id, agents):
             continue
         for event in room.get("timeline", {}).get("events", []):
             content = event.get("content", {})
+            if event.get("event_id") in by_id and isinstance(content.get("com.agentteams.answer"), dict):
+                by_id[event["event_id"]]["answer"] = content["com.agentteams.answer"]
             trigger = content.get("m.teamharness.trigger", {})
             if (
                 event.get("type") == "m.room.message"
@@ -216,6 +220,13 @@ class Bridge:
 
     def handle_control(self, event):
         body = event["body"]
+        answer = event.get("answer")
+        if isinstance(answer, dict):
+            request_id = next((key for key, value in self.pending_requests.items()
+                               if value.get("_confirmation_id") == answer.get("confirmation_id")), None)
+            if request_id is None:
+                return True
+            body = f"/answer {request_id} " + json.dumps({"responses": answer.get("responses")}, ensure_ascii=False)
         verb, _, argument = body.partition(" ")
         if verb not in {"/cancel", "/steer", "/approve", "/reject", "/answer"}:
             return False
@@ -423,6 +434,25 @@ class Bridge:
                                             for question in questions
                                         }
                                     }
+                                    if answer.startswith('{"responses":'):
+                                        responses = json.loads(answer)["responses"]
+                                        if not isinstance(responses, list) or len(responses) != len(questions):
+                                            raise ValueError("Answer every requested question exactly once")
+                                        structured = {}
+                                        for question in questions:
+                                            matches = [item for item in responses if isinstance(item, dict) and item.get("id") == question["id"]]
+                                            if len(matches) != 1:
+                                                raise ValueError("Question id is missing or duplicated")
+                                            response = matches[0]
+                                            selected = response.get("selected", [])
+                                            labels = {option["label"] for option in question.get("options", [])}
+                                            if not isinstance(selected, list) or any(value not in labels for value in selected):
+                                                raise ValueError("Unknown question option")
+                                            custom = response.get("custom", "")
+                                            if not isinstance(custom, str) or (not selected and not custom.strip()):
+                                                raise ValueError("Question answer is empty")
+                                            structured[question["id"]] = {"answers": selected + ([custom.strip()] if custom.strip() else [])}
+                                        result = {"answers": structured}
                                 elif method in {
                                     "item/commandExecution/requestApproval",
                                     "item/fileChange/requestApproval",
@@ -472,6 +502,26 @@ class Bridge:
                         }:
                             request_id = str(message["id"])
                             self.pending_requests[request_id] = message
+                            if method == "item/tool/requestUserInput":
+                                confirmation_id = "codex-input-" + hashlib.sha256(
+                                    f"{thread_id}:{turn['id']}:{request_id}".encode()).hexdigest()
+                                message["_confirmation_id"] = confirmation_id
+                                questions = [{
+                                    "id": question["id"], "question": question["question"],
+                                    "options": [{"id": option["label"], "label": option["label"],
+                                                 "description": option.get("description", "")}
+                                                for option in question.get("options", [])],
+                                } for question in params.get("questions", [])]
+                                self.matrix.send_content(event["room_id"], {
+                                    "msgtype": "m.text", "body": "\n".join(question["question"] for question in questions),
+                                    "org.agentteams.run": {"version": "1", "blocks": [{
+                                        "type": "confirmation", "tool_name": "ask_human",
+                                        "confirmation_id": confirmation_id, "questions": questions,
+                                        "requested_of": event["sender"],
+                                        "expires_at": int((time.time() + max(0, deadline - time.monotonic())) * 1000),
+                                    }]},
+                                }, f"codex:{event['event_id']}:request:{request_id}")
+                                continue
                             summary = (
                                 params.get("command")
                                 or params.get("questions")
