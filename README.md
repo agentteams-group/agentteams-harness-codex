@@ -52,6 +52,11 @@ In the active room, the requesting human or Team admin can send:
 /answer REQUEST_ID Your answer
 ```
 
+Dashboard cards append a `THREAD_ID:TURN_ID` context token to `/approve` and
+`/reject`. The bridge checks it before answering App Server, so an old card
+cannot approve a new turn that reused the same request ID. Bare manual commands
+remain supported for the currently active turn.
+
 Control messages from other Agents are rejected. Pending approval IDs expire when the turn or App Server ends. New messages without a control command are queued as new turns. Use `CODEX_APPROVAL_POLICY=on-request` for interactive approvals; the default `never` executes only within the configured sandbox and cannot escalate it. The default sandbox is `workspace-write`. On a dedicated disposable container without nested sandbox support, explicitly set `CODEX_SANDBOX_MODE=danger-full-access` to rely on container isolation; do not mount the Docker socket or unrestricted host directories into that container.
 
 ## Model configuration

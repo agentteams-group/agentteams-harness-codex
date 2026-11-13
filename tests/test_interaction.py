@@ -41,7 +41,7 @@ for line in sys.stdin:
 
 
 class InteractionTests(unittest.TestCase):
-    def run_case(self, method, command):
+    def run_case(self, method, command, stale_context=False):
         with (
             tempfile.TemporaryDirectory() as temporary,
             patch.dict(os.environ, {}, clear=True),
@@ -72,6 +72,8 @@ class InteractionTests(unittest.TestCase):
 
             def respond(_event, text, _suffix, approval=None):
                 if "needs human input" in text:
+                    if stale_context:
+                        bridge.handle_control({**event, "body": "/approve human-request old:turn"})
                     bridge.handle_control({**event, "body": command})
 
             bridge.reply = Mock(side_effect=respond)
@@ -104,6 +106,9 @@ class InteractionTests(unittest.TestCase):
                     self.assertEqual(data["context_id"], "thread-1:turn-1")
                     self.assertEqual(data["runtime"], "codex")
                 self.assertEqual(json.loads(approvals[0]["parameters"])["command"], "printf approved")
+                self.assertGreater(approvals[0]["expires_at"], 0)
+                if stale_context:
+                    self.assertTrue(any("belongs to another turn" in str(call) for call in bridge.reply.call_args_list))
             else:
                 self.assertEqual(approvals, [])
             return json.loads(result)
@@ -121,6 +126,9 @@ class InteractionTests(unittest.TestCase):
             self.run_case("item/fileChange/requestApproval", "/reject human-request"),
             {"decision": "decline"},
         )
+
+    def test_card_context_rejects_a_stale_turn_before_accepting_current_turn(self):
+        self.assertEqual(self.run_case("item/commandExecution/requestApproval", "/approve human-request thread-1:turn-1", stale_context=True), {"decision": "accept"})
 
     def test_human_answers_question(self):
         self.assertEqual(

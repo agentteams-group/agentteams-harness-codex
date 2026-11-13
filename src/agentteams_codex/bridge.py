@@ -429,6 +429,8 @@ class Bridge:
                                 }:
                                     if verb not in {"/approve", "/reject"}:
                                         raise ValueError("Use /approve REQUEST_ID or /reject REQUEST_ID")
+                                    if answer and answer != f"{thread_id}:{turn['id']}":
+                                        raise ValueError("The requested Codex approval belongs to another turn")
                                     result = {
                                         "decision": (
                                             "accept"
@@ -485,6 +487,7 @@ class Bridge:
                                     "version": 1, "runtime": "codex", "request_id": request_id,
                                     "context_id": f"{thread_id}:{turn['id']}",
                                     "status": "pending",
+                                    "expires_at": int((time.time() + max(0, deadline - time.monotonic())) * 1000),
                                     "tool_name": "commandExecution" if method == "item/commandExecution/requestApproval" else "fileChange",
                                     "parameters": json.dumps(params, ensure_ascii=False),
                                 } if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"} else None,
