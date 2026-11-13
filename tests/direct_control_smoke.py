@@ -75,7 +75,6 @@ with tempfile.TemporaryDirectory() as temporary:
     bridge.matrix = Mock()
     bridge.matrix.request.return_value = {'joined': {'@agent:test': {}, '@human:test': {}}}
     bridge.matrix.send_text.return_value = '$response'
-    bridge.persist_codex = lambda: None
     event = {'event_id': '$original', 'sender': '@human:test', 'room_id': '!dm:test', 'body': 'ORIGINAL_TASK', 'kind': 'text'}
     bridge.journal.ingest([event], 'cursor')
     errors = []
@@ -92,6 +91,10 @@ with tempfile.TemporaryDirectory() as temporary:
             while not Model.pidfile.exists() and thread.is_alive() and time.monotonic() < deadline:
                 time.sleep(0.05)
             assert Model.pidfile.exists(), ('native exec never started', errors, Model.requests)
+            deadline = time.monotonic() + 5
+            while not bridge.journal.data['events']['$original'].get('input_checkpointed') and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert bridge.journal.data['events']['$original'].get('input_checkpointed'), 'Native input was not checkpointed while tools were running'
             control = {**event, 'event_id': '$supplement', 'body': 'SUPPLEMENT_HANGZHOU',
                 'execution_control': {'action': action, 'agent_id': '@agent:test', 'run_id': '$original'}}
             assert bridge.handle_control(control)

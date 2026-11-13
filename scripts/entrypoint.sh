@@ -40,4 +40,6 @@ if [ "${CODEX_AUTH_MODE:-gateway}" = chatgpt ]; then
     cp "${CODEX_AUTH_FILE:?CODEX_AUTH_FILE is required in chatgpt mode}" "${CODEX_HOME}/auth.json"
     chmod 600 "${CODEX_HOME}/auth.json"
 fi
+export PYTHONPATH="/opt/agentteams/scripts/lib:/opt/agentteams/transport${PYTHONPATH:+:${PYTHONPATH}}"
+python3 /opt/agentteams/scripts/lib/agentteams_receipts.py serve --runtime codex --workspace "${WORKER_HOME}" &
 exec /opt/venv/bin/agentteams-codex
