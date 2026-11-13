@@ -64,7 +64,7 @@ For a trusted developer-only ChatGPT-account test, set `CODEX_AUTH_MODE=chatgpt`
 
 - Matrix E2EE, DingTalk transport, AgentSpec packages and legacy SSE MCP are not supported. Unsupported package/SSE configuration fails explicitly.
 - Execution is sequential per member. Use multiple members for parallel work.
-- Codex-specific session/history and approval UI integration in the AT Dashboard is outside this adapter; Matrix is the control interface.
+- Codex-specific session/history UI remains outside this adapter. Command and file approvals publish `org.agentteams.approval` Matrix metadata for Dashboard cards, with request and thread/turn IDs. Dashboard sends the existing `/approve ID` and `/reject ID` controls; accepted controls publish a runtime receipt. Questions keep `/answer ID text`, and pending approvals expire when the turn ends. Matching Dashboard support is required; this does not change the default approval or sandbox policies.
 - Skills from the TeamHarness bundle are available. Additional AT Skill registry/package distribution needs a separate compatibility implementation.
 - App Server is experimental upstream; re-run compatibility tests before changing the pinned Codex version.
 

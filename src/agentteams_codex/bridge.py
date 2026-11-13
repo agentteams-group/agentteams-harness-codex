@@ -198,7 +198,15 @@ class Bridge:
         if prefix:
             mc("cp", str(path), f"{prefix}/agents/{self.name}/runtime/{path.name}")
 
-    def reply(self, event, text, suffix):
+    def reply(self, event, text, suffix, approval=None):
+        if approval:
+            return self.matrix.send_content(
+                event["room_id"],
+                {"msgtype": "m.text", "body": text,
+                 "m.relates_to": {"m.in_reply_to": {"event_id": event["event_id"]}},
+                 "org.agentteams.approval": approval},
+                f"codex:{event['event_id']}:{suffix}",
+            )
         return self.matrix.send_text(
             event["room_id"],
             text,
@@ -419,6 +427,8 @@ class Bridge:
                                     "item/commandExecution/requestApproval",
                                     "item/fileChange/requestApproval",
                                 }:
+                                    if verb not in {"/approve", "/reject"}:
+                                        raise ValueError("Use /approve REQUEST_ID or /reject REQUEST_ID")
                                     result = {
                                         "decision": (
                                             "accept"
@@ -430,6 +440,13 @@ class Bridge:
                                     result = {"action": "decline", "content": None}
                                 client.send({"id": request["id"], "result": result})
                                 self.pending_requests.pop(request_id, None)
+                                if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
+                                    self.reply(event, f"Codex approval {request_id}: {result['decision']}.",
+                                        f"approval:{request_id}:resolved", {
+                                            "version": 1, "runtime": "codex", "request_id": request_id,
+                                            "context_id": f"{thread_id}:{turn['id']}",
+                                            "status": "approved" if result["decision"] == "accept" else "rejected",
+                                        })
                             self.reply(source, "Codex control accepted.", "control")
                         except (ValueError, CodexError) as error:
                             self.reply(source, str(error), "control")
@@ -464,6 +481,13 @@ class Bridge:
                                 event,
                                 f"Codex needs human input ({request_id}): {summary}\nUse /approve {request_id}, /reject {request_id}, or /answer {request_id} text.",
                                 f"request:{request_id}",
+                                {
+                                    "version": 1, "runtime": "codex", "request_id": request_id,
+                                    "context_id": f"{thread_id}:{turn['id']}",
+                                    "status": "pending",
+                                    "tool_name": "commandExecution" if method == "item/commandExecution/requestApproval" else "fileChange",
+                                    "parameters": json.dumps(params, ensure_ascii=False),
+                                } if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"} else None,
                             )
                         else:
                             client.send(
@@ -518,6 +542,12 @@ class Bridge:
                 raise InterruptedError("Worker is shutting down")
             finally:
                 self.active = None
+                for request_id, request in list(self.pending_requests.items()):
+                    if request["method"] in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
+                        self.reply(event, f"Codex approval {request_id} expired.", f"approval:{request_id}:expired", {
+                            "version": 1, "runtime": "codex", "request_id": request_id, "status": "expired",
+                            "context_id": f"{thread_id}:{turn['id']}",
+                        })
                 self.pending_requests.clear()
 
     def process(self, event_id, record):

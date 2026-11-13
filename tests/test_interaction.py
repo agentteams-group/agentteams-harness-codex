@@ -70,7 +70,7 @@ class InteractionTests(unittest.TestCase):
                 "kind": "text",
             }
 
-            def respond(_event, text, _suffix):
+            def respond(_event, text, _suffix, approval=None):
                 if "needs human input" in text:
                     bridge.handle_control({**event, "body": command})
 
@@ -96,6 +96,16 @@ class InteractionTests(unittest.TestCase):
                 patch("agentteams_codex.bridge.Client", side_effect=factory),
             ):
                 result = bridge.run_turn(event, {"status": "queued"})
+            approvals = [call.args[3] for call in bridge.reply.call_args_list if len(call.args) > 3 and call.args[3]]
+            if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
+                self.assertEqual([data["status"] for data in approvals], ["pending", "approved" if command.startswith("/approve") else "rejected"])
+                for data in approvals:
+                    self.assertEqual(data["request_id"], "human-request")
+                    self.assertEqual(data["context_id"], "thread-1:turn-1")
+                    self.assertEqual(data["runtime"], "codex")
+                self.assertEqual(json.loads(approvals[0]["parameters"])["command"], "printf approved")
+            else:
+                self.assertEqual(approvals, [])
             return json.loads(result)
 
     def test_human_accepts_command_approval(self):
@@ -119,6 +129,30 @@ class InteractionTests(unittest.TestCase):
             ),
             {"answers": {"q": {"answers": ["chosen option"]}}},
         )
+
+    def test_reply_serializes_contract_into_matrix_event(self):
+        bridge = Bridge.__new__(Bridge)
+        bridge.matrix = Mock()
+        event = {"room_id": "!room:test", "event_id": "$turn"}
+        approval = {"version": 1, "runtime": "codex", "request_id": "1", "context_id": "thread:turn", "status": "pending", "tool_name": "fileChange"}
+        bridge.reply(event, "Please approve", "request:1", approval)
+        args = bridge.matrix.send_content.call_args.args
+        self.assertEqual(args[1]["org.agentteams.approval"], approval)
+        self.assertEqual(args[1]["m.relates_to"]["m.in_reply_to"]["event_id"], "$turn")
+        bridge.matrix.send_text.assert_not_called()
+
+    def test_only_requesting_human_or_admin_can_resolve(self):
+        bridge = Bridge.__new__(Bridge)
+        bridge.config = {"team": {"admin": {"matrixUserId": "@admin:test"}}}
+        bridge.agent_ids = {"@worker:test"}
+        bridge.controls = queue.Queue()
+        bridge.active = {"event": {"room_id": "!room:test", "sender": "@human:test"}, "thread_id": "thread", "turn_id": "turn"}
+        bridge.reply = Mock()
+        for sender in ["@worker:test", "@stranger:test"]:
+            bridge.handle_control({"room_id": "!room:test", "sender": sender, "body": "/approve req-1"})
+        self.assertTrue(bridge.controls.empty())
+        bridge.handle_control({"room_id": "!room:test", "sender": "@human:test", "body": "/approve req-1"})
+        self.assertEqual(bridge.controls.get_nowait()[1:3], ("/approve", "req-1"))
 
 
 if __name__ == "__main__":
