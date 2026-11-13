@@ -39,6 +39,15 @@ from matrix_bridge import (
 
 def actionable_events(payload, rooms, user_id, agents):
     events = matrix_events(payload, rooms, user_id, agents)
+    content_by_id = {
+        event.get("event_id"): event.get("content", {})
+        for room in payload.get("rooms", {}).get("join", {}).values()
+        for event in room.get("timeline", {}).get("events", [])
+    }
+    for event in events:
+        control = content_by_id.get(event["event_id"], {}).get("com.agentteams.control")
+        if control is not None:
+            event["execution_control"] = control
     # TeamHarness uses an authenticated same-agent event to continue Project
     # Work in a task room. Ordinary self messages must remain suppressed.
     for room_id, room in payload.get("rooms", {}).get("join", {}).items():
@@ -217,8 +226,24 @@ class Bridge:
     def handle_control(self, event):
         body = event["body"]
         verb, _, argument = body.partition(" ")
+        control = event.get("execution_control")
+        if control is not None:
+            if not isinstance(control, dict) or control.get("action") not in {"stop", "steer"} or control.get("agent_id") != self.user_id:
+                return True
+            active = self.active
+            if not active or control.get("run_id") != active["event"]["event_id"] or event["room_id"] != active["event"]["room_id"]:
+                return control["action"] == "stop"
+            if event["sender"] != active["event"]["sender"] or not self.direct_member(event):
+                return True
+            # Persist the supplementary event before interrupting: the poller
+            # and native turn run on separate threads, and either may win.
+            if control["action"] == "steer":
+                self.journal.ingest([{**event, "control": True}], self.journal.data["cursor"])
+            verb = "/redirect" if control["action"] == "steer" else "/cancel"
+            argument = body
         if verb not in {"/cancel", "/steer", "/approve", "/reject", "/answer"}:
-            return False
+            if verb != "/redirect":
+                return False
         active = self.active
         admin = self.config.get("team", {}).get("admin", {}).get("matrixUserId")
         if not active or event["room_id"] != active["event"]["room_id"]:
@@ -243,6 +268,22 @@ class Bridge:
                 )
             )
         return True
+
+    def direct_member(self, event):
+        if event["sender"] in self.agent_ids or self.rooms.get(event["room_id"]) != "personal":
+            return False
+        try:
+            members = self.matrix.request("GET", "/_matrix/client/v3/rooms/" + urllib.parse.quote(event["room_id"], safe="") + "/joined_members")
+            return set(members.get("joined", {})) == {self.user_id, event["sender"]}
+        except Exception:
+            return False
+
+    def execution_status(self, event, status, message_id=None):
+        self.matrix.send_content(event["room_id"], {
+            "msgtype": "m.notice", "body": {"running": "正在执行", "stopping": "正在停止", "stopped": "已停止", "completed": "本轮已结束", "failed": "执行失败"}[status],
+            "com.agentteams.execution": {"run_id": event["event_id"], "status": status,
+                "capabilities": ["stop", "steer"], **({"message_id": message_id} if message_id else {})},
+        }, f"codex:{event['event_id']}:execution:{status}")
 
     def poll(self):
         while not self.stop.is_set():
@@ -379,6 +420,11 @@ class Bridge:
                 "thread_id": thread_id,
                 "turn_id": turn["id"],
             }
+            direct = self.direct_member(event)
+            record["direct"] = direct
+            if direct:
+                self.execution_status(event, "running")
+            redirects = []
             self.journal.save()
             answers = []
             deadline = time.monotonic() + int(
@@ -399,8 +445,12 @@ class Bridge:
                                 raise ValueError(
                                     "The requested Codex turn has already ended"
                                 )
-                            if verb == "/cancel":
+                            if verb in {"/cancel", "/redirect"}:
                                 client.control("turn/interrupt", thread_id, turn["id"])
+                                if direct and source.get("execution_control"):
+                                    self.execution_status(event, "stopping")
+                                if verb == "/redirect":
+                                    redirects.append(source)
                             elif verb == "/steer":
                                 client.control(
                                     "turn/steer", thread_id, turn["id"], argument
@@ -538,6 +588,16 @@ class Bridge:
                                 or "Codex completed the task."
                             )
                         if terminal["status"] == "interrupted":
+                            record["stopped"] = True
+                            if redirects:
+                                combined = "继续原任务，保留已有工具结果，不要重复已完成的操作。\n" + event["body"]
+                                for source in redirects:
+                                    combined += "\n用户补充：" + source["body"]
+                                    self.journal.data["events"][source["event_id"]]["status"] = "completed"
+                                last = self.journal.data["events"][redirects[-1]["event_id"]]
+                                last["event"] = {**last["event"], "control": False, "body": combined}
+                                last["status"] = "queued"
+                                self.journal.save()
                             return "Codex execution was cancelled."
                         error = terminal.get("error") or {}
                         raise CodexError(error.get("message", "Codex turn failed"))
@@ -576,7 +636,7 @@ class Bridge:
             self.journal.save()
         restore_output_paths(self.name, self.workspace, record["outputs"])
         source = source_agent_reply_user_id(event, self.agent_ids, self.user_id)
-        self.matrix.send_text(
+        message_id = self.matrix.send_text(
             event["room_id"],
             record["answer"],
             event_id,
@@ -586,6 +646,8 @@ class Bridge:
             ),
             bool(source),
         )
+        if record.get("direct"):
+            self.execution_status(event, "stopped" if record.get("stopped") else "failed" if record.get("error") else "completed", message_id)
         send_output_paths(
             self.matrix,
             event["room_id"],
