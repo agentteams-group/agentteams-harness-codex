@@ -19,6 +19,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .client import Client, CodexError, completed_answer
 from .config import prepare, read_runtime
+try:
+    from runtime_observability import event as trace_event
+except ImportError:
+    def trace_event(*args, **kwargs):
+        pass  # Standalone packages can run without container logging.
 
 # The transport and file helpers are consumed unchanged from a pinned AT
 # commit. Runtime execution and Codex state belong to this repository.
@@ -35,11 +40,12 @@ from matrix_bridge import (
     reply_mention_user_ids,
     source_agent_reply_user_id,
     mc,
+    manager_allowed_senders,
 )
 
 
-def actionable_events(payload, rooms, user_id, agents):
-    events = matrix_events(payload, rooms, user_id, agents)
+def actionable_events(payload, rooms, user_id, agents, allowed_senders=None):
+    events = matrix_events(payload, rooms, user_id, agents, allowed_senders)
     by_id = {event["event_id"]: event for event in events}
     content_by_id = {
         event.get("event_id"): event.get("content", {})
@@ -183,6 +189,7 @@ class Bridge:
         self.active = None
         self.pending_requests = {}
         self.last_sync = 0
+        self.reported_ready = False
         self.config = read_runtime(self.runtime_path)
         self.refresh_context()
 
@@ -191,6 +198,9 @@ class Bridge:
             self.runtime_path, self.name, os.environ["AGENTTEAMS_MATRIX_DOMAIN"]
         )
         self.agent_ids = runtime_agent_user_ids(self.runtime_path)
+        if self.config.get("member", {}).get("role") == "manager":
+            domain = os.environ["AGENTTEAMS_MATRIX_DOMAIN"]
+            self.agent_ids = manager_allowed_senders(self.runtime_path, domain) - {f"@{os.getenv('AGENTTEAMS_ADMIN_USER', 'admin')}:{domain}"}
         if not self.rooms:
             raise ValueError("runtime.yaml has no Matrix rooms")
 
@@ -311,6 +321,7 @@ class Bridge:
 
     def poll(self):
         while not self.stop.is_set():
+            stage = "config.refresh"
             try:
                 prefix = os.getenv("AGENTTEAMS_STORAGE_PREFIX")
                 if prefix:
@@ -328,8 +339,13 @@ class Bridge:
                     else:
                         temporary.unlink()
                 cursor = self.journal.data["cursor"]
+                stage = "matrix.sync"
                 payload = self.matrix.sync(cursor or None, 1000)
-                trusted = self.agent_ids | {
+                stage = "matrix.events"
+                allowed_senders = None
+                if self.config.get("member", {}).get("role") == "manager":
+                    allowed_senders = manager_allowed_senders(self.runtime_path, os.environ["AGENTTEAMS_MATRIX_DOMAIN"])
+                trusted = allowed_senders if allowed_senders is not None else self.agent_ids | {
                     self.config.get("team", {}).get("admin", {}).get("matrixUserId", "")
                 }
                 for room_id, room in payload.get("rooms", {}).get("invite", {}).items():
@@ -352,7 +368,7 @@ class Bridge:
                 if cursor:
                     self.matrix.fill_timeline_gaps(payload, cursor, self.rooms)
                 events = (
-                    actionable_events(payload, self.rooms, self.user_id, self.agent_ids)
+                    actionable_events(payload, self.rooms, self.user_id, self.agent_ids, allowed_senders)
                     if cursor
                     else []
                 )
@@ -382,9 +398,22 @@ class Bridge:
                     else:
                         queued.append(event)
                 self.journal.ingest(queued, payload.get("next_batch", cursor))
+                for received in queued:
+                    trace_event("message.received", room_id=received["room_id"], event_id=received["event_id"], sender=received["sender"])
+                if not self.last_sync:
+                    trace_event("runtime.ready", evidence="matrix_sync")
                 self.last_sync = time.time()
+                if os.getenv("AGENTTEAMS_CONTROLLER_URL") and not self.reported_ready:
+                    try:
+                        subprocess.run(["agt", "worker", "report-ready", "--name",
+                                        os.getenv("AGENTTEAMS_WORKER_CR_NAME", self.name)], check=True, timeout=60)
+                    except (OSError, subprocess.SubprocessError) as error:
+                        trace_event("readiness.report_failed", error_type=type(error).__name__, error=str(error)[:4096])
+                    else:
+                        self.reported_ready = True
             except Exception as error:
-                # Never include upstream response bodies or credentials in logs.
+                detail = error.stderr if isinstance(error, subprocess.CalledProcessError) and error.stderr else str(error)
+                trace_event("poll.failed", stage=stage, error_type=type(error).__name__, error=detail[:4096])
                 print(
                     f"[agentteams-codex] Matrix poll failed: {type(error).__name__}",
                     flush=True,
@@ -392,6 +421,7 @@ class Bridge:
                 self.stop.wait(2)
 
     def run_turn(self, event, record):
+        trace_event("turn.begin", room_id=event["room_id"], event_id=event["event_id"])
         config = read_runtime(self.runtime_path)
         model, instructions = prepare(config, self.home, self.workspace, self.plugin)
         credential = os.getenv("AGENTTEAMS_WORKER_GATEWAY_KEY") or config.get(
@@ -418,6 +448,7 @@ class Bridge:
                 text += "\nUser request: " + event["body"]
             if event["kind"] == "image":
                 image = attachment
+        trace_event("inference.begin", model=model, room_id=event["room_id"], event_id=event["event_id"], layer="agent_turn")
         with Client(self.workspace, env=environment) as client:
             thread = client.open_thread(thread_id, self.workspace, model, instructions)
             thread_id = thread["id"]
@@ -638,6 +669,14 @@ class Bridge:
                         .get("matrix", {})
                         .get("filter_tool_messages", False)
                     )
+                    if method in {"item/started", "item/completed"}:
+                        item = params.get("item", {})
+                        if item.get("type") in {"commandExecution", "mcpToolCall", "fileChange"}:
+                            failed = bool(item.get("error")) or item.get("exitCode") not in (None, 0) or item.get("status") == "failed"
+                            trace_event("tool.begin" if method == "item/started" else "tool.end",
+                                        event_id=event["event_id"], room_id=event["room_id"],
+                                        tool_type=item.get("type"), item_id=item.get("id"), status="failed" if failed else item.get("status"),
+                                        error=item.get("error") or ((item.get("aggregatedOutput") or "")[:4096] if failed else None), exit_code=item.get("exitCode"))
                     if show_tools and method == "item/started":
                         kind = params.get("item", {}).get("type", "work")
                         if (
@@ -655,6 +694,7 @@ class Bridge:
                         and params.get("turn", {}).get("id") == turn["id"]
                     ):
                         terminal = params["turn"]
+                        trace_event("inference.end", event_id=event["event_id"], status=terminal.get("status"), error=terminal.get("error"), layer="agent_turn")
                         if terminal["status"] == "completed":
                             return (
                                 "\n".join(filter(None, answers))
@@ -701,6 +741,7 @@ class Bridge:
             except Exception as error:
                 # Preserve the terminal error, so Matrix delivery retries do not
                 # execute the model/tool turn again.
+                trace_event("turn.failed", event_id=event_id, error_type=type(error).__name__, error=str(error)[:4096])
                 answer = f"Codex execution failed ({type(error).__name__}): {error}"
                 record["error"] = type(error).__name__
             self.persist_codex()
@@ -732,6 +773,7 @@ class Bridge:
             bool(source),
         )
         record["status"] = "completed"
+        trace_event("message.sent", room_id=event["room_id"], event_id=event_id, reply_event_id=message_id)
         # Retain bounded replay protection; pending events are never pruned.
         completed = [
             key
@@ -756,6 +798,8 @@ class Bridge:
                 try:
                     self.process(event_id, record)
                 except Exception as error:
+                    detail = error.stderr if isinstance(error, subprocess.CalledProcessError) and error.stderr else str(error)
+                    trace_event("delivery.failed", event_id=event_id, error_type=type(error).__name__, error=detail[:4096])
                     print(
                         f"[agentteams-codex] delivery pending: {type(error).__name__}",
                         flush=True,

@@ -26,7 +26,7 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
         "remote": "remote-member",
         "standalone": "worker",
     }.get(role, role)
-    if role not in {"leader", "worker", "remote-member"}:
+    if role not in {"manager", "leader", "worker", "remote-member"}:
         raise ValueError(f"unsupported Codex role: {role}")
     home.mkdir(parents=True, exist_ok=True)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -39,7 +39,7 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
     manifest = yaml.safe_load((plugin / "plugin.yaml").read_text())
     skills = []
     selected_ids = set()
-    for section in ("agent", "team"):
+    for section in ("manager", "agent", "team"):
         for skill in manifest.get("skills", {}).get(section, []):
             if role in skill.get("roles", []):
                 selected_ids.add(skill["id"])
@@ -69,10 +69,10 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
     context = [
         (
             (plugin / "prompts/team/TEAMS.md").read_text()
-            if config.get("team")
-            else "You are an independent AgentTeams member. Answer in the current room; do not invent a Team."
+            if config.get("team") and role != "manager"
+            else "" if role == "manager" else "You are an independent AgentTeams member. Answer in the current room; do not invent a Team."
         ),
-        (plugin / f"prompts/agent/{role}.md").read_text() if config.get("team") else "",
+        (plugin / f"prompts/agent/{role}.md").read_text() if config.get("team") and role != "manager" else "",
         "Current AgentTeams context:\n"
         + yaml.safe_dump(
             {"member": member, "team": config.get("team", {})}, allow_unicode=True
@@ -81,6 +81,9 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
         "Use your native TeamHarness MCP tools for collaboration, task state, file synchronization and artifacts.",
         "After sending a request to another member, end your turn so its reply can be processed as the next turn. Only report successful delivery or task completion after checking tool results and member evidence.",
     ]
+    if role == "manager":
+        for path in manifest.get("prompts", {}).get("manager", {}).values():
+            context.append((plugin / path).read_text())
     for field, value in desired.get("inlineConfig", {}).items():
         if value:
             context.append(f"{field}:\n{value}")
