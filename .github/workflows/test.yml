@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: agentscope-ai/AgentTeams
-          ref: f25087c28b0de9470284e98be48c9d84bfa2aa34
+          ref: 6fe76bf94badf4cc56bdce46f16d66710e083f39
           path: at
           submodules: recursive
       - uses: actions/setup-python@v5
@@ -27,6 +27,7 @@ jobs:
       - name: Test the actual container Python and transport assets
         run: |
           docker build --build-context at=./at -t codex-harness-test ./harness
+          docker run --rm --entrypoint agt codex-harness-test worker report-ready --help
           docker run --rm --entrypoint /opt/venv/bin/python3 \
             -e AT_SOURCE=/opt/agentteams/transport \
             -v "${{ github.workspace }}/harness/tests:/tests:ro" \

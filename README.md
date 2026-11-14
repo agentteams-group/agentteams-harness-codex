@@ -1,6 +1,10 @@
 # AgentTeams Codex Harness
 
-Run the unmodified Codex App Server as an AgentTeams-managed runtime. AT owns the member lifecycle, Matrix identity and storage; this adapter owns the Codex process, configuration, event journal and native session snapshots. Leader and Worker are roles of the same runtime.
+Run the unmodified Codex App Server as an AgentTeams-managed runtime. AT owns the member lifecycle, Matrix identity and storage; this adapter owns the Codex process, configuration, event journal and native session snapshots. Manager, Leader and Worker are roles of the same runtime.
+
+Managers load the shared TeamHarness Manager prompts, resource-management and diagnosis Skills without requiring Team membership. Your Matrix adapter uses the Controller-owned Manager sender allow-list, requires mentions in group rooms and reports readiness after a successful Matrix sync. Select `runtime: codex` and an image containing this support on your Manager resource; the older v1.2.7 image supports Worker/Leader only. Your gateway route must support the Responses API.
+
+Container launches use the shared bounded runtime logger. Inspect `status.json`, `events.jsonl` and `runtime.log` under `/var/log/agentteams/manager/` or `/var/log/agentteams/workers/<resource-name>/`. Tool failures retain native error details, exit codes and item IDs; model-turn failures retain their concrete reason. Credentials are redacted. Mount the directory explicitly if you need logs after container replacement. See the [Core logging contract](https://github.com/agentscope-ai/AgentTeams/blob/main/docs/usage/runtime-logging.md).
 
 Native `requestUserInput` requests render as inline Dashboard question cards.
 Structured answers preserve each question ID and selected or custom answer;

@@ -9,6 +9,11 @@ import signal
 import subprocess
 import threading
 import time
+try:
+    from runtime_observability import event as trace_event
+except ImportError:
+    def trace_event(*args, **kwargs):
+        pass
 
 
 class CodexError(RuntimeError):
@@ -23,7 +28,7 @@ class Client:
             env=env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             start_new_session=True,
         )
@@ -33,6 +38,8 @@ class Client:
         self.timeout = timeout
         self.write_lock = threading.Lock()
         threading.Thread(target=self._read, daemon=True).start()
+        self.stderr_reader = threading.Thread(target=self._read_stderr, daemon=True)
+        self.stderr_reader.start()
         try:
             self.request(
                 "initialize",
@@ -48,6 +55,10 @@ class Client:
         except Exception:
             self.close()
             raise
+
+    def _read_stderr(self):
+        for line in self.proc.stderr:
+            trace_event("runtime.stderr", component="codex.app-server", detail=line.rstrip()[:4096])
 
     def _read(self):
         try:
@@ -156,6 +167,8 @@ class Client:
         except ProcessLookupError:
             pass
         self.proc.stdout.close()
+        self.stderr_reader.join(timeout=2)
+        self.proc.stderr.close()
 
     def __enter__(self):
         return self

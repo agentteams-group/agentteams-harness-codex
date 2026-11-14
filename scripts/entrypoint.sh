@@ -1,4 +1,9 @@
 #!/bin/bash
+if [ "${AGENTTEAMS_LOG_CAPTURED:-}" != "1" ]; then
+    exec python3 "${AGENTTEAMS_LOG_LIB_DIR:-/opt/agentteams/scripts/lib}/runtime_supervisor.py" --runtime codex -- bash "$0" "$@"
+fi
+python3 "${AGENTTEAMS_LOG_LIB_DIR:-/opt/agentteams/scripts/lib}/runtime_observability.py" bootstrap
+
 set -euo pipefail
 
 source /opt/agentteams/scripts/lib/agentteams-env.sh
