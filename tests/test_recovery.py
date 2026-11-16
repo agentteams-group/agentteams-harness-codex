@@ -7,7 +7,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 source = Path(os.environ["AT_SOURCE"])
-sys.path[:0] = [str(source / "shared/lib"), str(source / "deepseek-harness/scripts"), str(Path(__file__).resolve().parents[1] / "src")]
+lib = source / "shared/lib" if (source / "shared/lib").is_dir() else Path("/opt/agentteams/scripts/lib")
+transport = source / "deepseek-harness/scripts" if (source / "deepseek-harness").is_dir() else source
+sys.path[:0] = [str(lib), str(transport), str(Path(__file__).resolve().parents[1] / "src")]
 from task_recovery import Recovery
 from agentteams_codex.bridge import Bridge, Journal
 
