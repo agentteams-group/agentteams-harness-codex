@@ -195,7 +195,7 @@ class Bridge:
 
     def recover_tasks(self, only_task=None):
         from task_recovery import Recovery, enabled
-        if not enabled() or not self.config.get("team", {}).get("name"):
+        if not enabled() or self.config.get("member", {}).get("role") == "manager":
             return
         recovery = Recovery()
         snapshot = recovery.discover()

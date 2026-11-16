@@ -58,6 +58,12 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.bridge.journal.data["cursor"], "keep-all-backlog")
         self.bridge.matrix.send_text.assert_not_called()
 
+    def test_self_discovery_does_not_depend_on_local_team_cache(self):
+        self.bridge.config = {"member": {"role": "standalone"}}
+        self.bridge.recover_tasks()
+        self.recovery.discover.assert_called_once()
+        self.assertIn("recovery:team/t1:2", self.bridge.journal.data["events"])
+
     def test_recovery_sources_survive_another_generation_without_synthetic_receipts(self):
         self.bridge.journal.ingest([{"event_id": "recovery:team/t1:1", "room_id": "!task:test",
             "session_source_event_ids": ["$assignment", "recovery:team/t1:0"],
