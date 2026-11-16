@@ -33,6 +33,7 @@ class RecoveryTests(unittest.TestCase):
         self.recovery.digest.side_effect = Recovery.digest
         self.recovery.discover.return_value = {"tasks": [{"task": self.task, "team_id": "team", "etag": "e"}], "instance_id": "new-start"}
         self.recovery.claim.return_value = {"task": self.task, "spec": "Do one, two, three", "saved_result": "Saved answer"}
+        self.recovery.current.return_value = self.task
         self.factory = patch("task_recovery.Recovery", return_value=self.recovery)
         self.factory.start().digest.side_effect = Recovery.digest
         self.addCleanup(self.factory.stop)
@@ -79,6 +80,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertIsNone(event["recovery"]["thread_id"])
 
     def test_saved_result_only_resends_stable_transaction(self):
+        self.task["status"] = "submitted"
         cp = self.task["execution"]["checkpoint"]
         cp.update(delivery="pending", reply_txn="stable-reply")
         self.bridge.matrix.send_text.return_value = "$sent"
@@ -87,6 +89,40 @@ class RecoveryTests(unittest.TestCase):
         self.recovery.delivered.assert_called_once_with("t1", "team", "$sent")
         self.bridge.run_turn.assert_not_called()
         self.assertFalse(self.bridge.journal.data["events"])
+
+    def test_delivered_progress_is_not_authoritative_task_completion(self):
+        self.task["execution"]["checkpoint"].update(delivery="delivered", reply_txn="step-one-reply")
+        self.bridge.recover_tasks()
+        record = self.bridge.journal.data["events"]["recovery:team/t1:2"]
+        self.assertIn('"remaining_steps": ["two", "three"]', record["event"]["body"])
+
+    def test_pending_progress_is_delivered_before_resuming_active_task(self):
+        self.task["execution"]["checkpoint"].update(delivery="pending", reply_txn="step-one-reply")
+        self.recovery.current.return_value = self.task
+        self.bridge.recover_tasks()
+        self.recovery.delivered.assert_called_once()
+        self.assertIn("recovery:team/t1:2", self.bridge.journal.data["events"])
+
+    def test_next_generation_runs_after_progress_but_its_delivered_turn_is_not_repeated(self):
+        cp = self.task["execution"]["checkpoint"]
+        cp.update(delivery="delivered", reply_txn="step-one-reply")
+        self.recovery.process = "process"
+        self.bridge.persist_codex = Mock()
+        self.bridge.run_turn.return_value = "Step two done"
+        saved = {**cp, "version": 4, "delivery": "pending", "reply_txn": "step-two-reply"}
+        self.recovery.save_reply.return_value = {"execution": {"checkpoint": saved}}
+        delivered = {**saved, "version": 5, "delivery": "delivered"}
+        self.recovery.delivered.return_value = {"execution": {"checkpoint": delivered}}
+        record = {"event": {"room_id": "!task:test", "recovery": {"task_id": "t1", "team_id": "team", "spec": "Three steps"}},
+                  "status": "queued", "thread_id": "native"}
+        self.bridge.process_recovered_task("recovery:team/t1:2", record)
+        self.bridge.run_turn.assert_called_once()
+        self.assertEqual(record["reply_txn"], "step-two-reply")
+        self.task["execution"]["checkpoint"] = delivered
+        record["status"] = "running"  # Crash after delivery, before local completion persisted.
+        self.bridge.process_recovered_task("recovery:team/t1:2", record)
+        self.bridge.run_turn.assert_called_once()
+        self.assertEqual(record["status"], "completed")
 
     def test_reassignment_prevents_model_execution(self):
         self.recovery.current.return_value = None

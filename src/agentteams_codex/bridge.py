@@ -213,8 +213,12 @@ class Bridge:
             if cp.get("delivery") == "pending":
                 event_id = self.matrix.send_text(room, claimed["saved_result"], transaction_key=cp["reply_txn"], progress_only=True)
                 recovery.delivered(task_id, team, event_id)
-                continue
-            if task["status"] == "submitted" or cp.get("delivery") == "delivered":
+                task = recovery.current(task_id, team)
+                if task is None:
+                    continue
+                execution = task["execution"]
+                cp = execution.get("checkpoint") or {}
+            if task["status"] == "submitted":
                 continue
             key = team + "/" + task_id
             session = self.journal.data.get("task_sessions", {}).get(key)
@@ -874,7 +878,7 @@ class Bridge:
         if execution["process_id"] != recovery.process:
             raise RecoveryConflict("Task execution was replaced")
         cp = execution.get("checkpoint") or {}
-        if cp.get("delivery") == "delivered":
+        if cp.get("delivery") == "delivered" and (task["status"] == "submitted" or record.get("reply_txn") == cp.get("reply_txn")):
             record["status"] = "completed"
             self.journal.save()
             return
@@ -892,17 +896,19 @@ class Bridge:
             self.persist_codex()
             saved = recovery.save_reply(task_id, team, answer)
             cp = saved["execution"]["checkpoint"]
-            self.journal.data.setdefault("task_sessions", {})[team+"/"+task_id] = {
-                "thread_id": record["thread_id"], "runtime": "codex", "expires_at": time.time()+86400,
-                "checkpoint_digest": recovery.digest(cp)}
-            self.journal.save()
         else:
             # The Controller revalidates the saved bytes on a repeated claim.
             snapshot = recovery.discover()
             entry = next(e for e in snapshot["tasks"] if e["task"]["task_id"] == task_id and e["team_id"] == team)
             answer = recovery.claim(snapshot, entry)["saved_result"]
+        record["reply_txn"] = cp["reply_txn"]
+        self.journal.save()
         message_id = self.matrix.send_text(event["room_id"], answer, transaction_key=cp["reply_txn"], progress_only=True)
-        recovery.delivered(task_id, team, message_id)
+        saved = recovery.delivered(task_id, team, message_id)
+        if record.get("thread_id"):
+            self.journal.data.setdefault("task_sessions", {})[team+"/"+task_id] = {
+                "thread_id": record["thread_id"], "runtime": "codex", "expires_at": time.time()+86400,
+                "checkpoint_digest": recovery.digest(saved["execution"]["checkpoint"])}
         record["status"] = "completed"
         self.journal.save()
 
