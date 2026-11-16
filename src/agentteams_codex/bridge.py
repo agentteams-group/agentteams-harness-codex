@@ -193,6 +193,47 @@ class Bridge:
         self.config = read_runtime(self.runtime_path)
         self.refresh_context()
 
+    def recover_tasks(self, only_task=None):
+        from task_recovery import Recovery, enabled
+        if not enabled() or not self.config.get("team", {}).get("name"):
+            return
+        recovery = Recovery()
+        snapshot = recovery.discover()
+        for entry in snapshot["tasks"]:
+            task_id, team = entry["task"]["task_id"], entry["team_id"]
+            if only_task is not None and task_id != only_task:
+                continue
+            claimed = recovery.claim(snapshot, entry)
+            task = claimed["task"]
+            execution = task["execution"]
+            cp = execution.get("checkpoint") or {}
+            room = task.get("room_id")
+            if not room:
+                raise ValueError("Recoverable Task has no Matrix room")
+            if cp.get("delivery") == "pending":
+                event_id = self.matrix.send_text(room, claimed["saved_result"], transaction_key=cp["reply_txn"], progress_only=True)
+                recovery.delivered(task_id, team, event_id)
+                continue
+            if task["status"] == "submitted" or cp.get("delivery") == "delivered":
+                continue
+            key = team + "/" + task_id
+            session = self.journal.data.get("task_sessions", {}).get(key)
+            local_thread = session.get("thread_id") if recovery.session_usable(session, task, "codex") else None
+            event_id = "recovery:" + key + ":" + str(execution["generation"])
+            task = {**task, "team_id": team, "spec": claimed["spec"]}
+            event = {"event_id": event_id, "room_id": room, "sender": self.user_id,
+                     "kind": "text", "body": recovery.resume_text(task),
+                     "coordination_session": "recovery:" + key,
+                     "recovery": {"task_id": task_id, "team_id": team, "thread_id": local_thread, "spec": claimed["spec"]}}
+            # Supersede only the same Task's local admission. Other Matrix
+            # backlog stays queued and its cursor is never reset.
+            for old_id, old in list(self.journal.data["events"].items()):
+                prior = old["event"].get("recovery", {})
+                if (old["event"].get("coordination_session", "").startswith("coordination-task:" + task_id + ":")
+                        or (old_id != event_id and prior.get("task_id") == task_id and prior.get("team_id") == team)):
+                    old["status"] = "superseded"
+            self.journal.ingest([event], self.journal.data["cursor"])
+
     def refresh_context(self):
         self.user_id, self.rooms = runtime_matrix_context(
             self.runtime_path, self.name, os.environ["AGENTTEAMS_MATRIX_DOMAIN"]
@@ -432,6 +473,8 @@ class Bridge:
             "CODEX_GATEWAY_KEY": os.getenv("CODEX_GATEWAY_KEY") or credential,
         }
         thread_id = self.journal.data["rooms"].get(event.get("coordination_session", event["room_id"]))
+        if event.get("recovery"):
+            thread_id = event["recovery"].get("thread_id")
         text, image = event["body"], None
         if event["kind"] != "text":
             text, attachment = materialize_attachment(
@@ -450,7 +493,19 @@ class Bridge:
                 image = attachment
         trace_event("inference.begin", model=model, room_id=event["room_id"], event_id=event["event_id"], layer="agent_turn")
         with Client(self.workspace, env=environment) as client:
-            thread = client.open_thread(thread_id, self.workspace, model, instructions)
+            if event.get("recovery") and record.get("status") == "running" and record.get("thread_id"):
+                previous = client.request("thread/read", {"threadId": record["thread_id"], "includeTurns": True})["thread"]
+                recovered = completed_answer(previous, event["event_id"])
+                if recovered is not None:
+                    return recovered
+            try:
+                thread = client.open_thread(thread_id, self.workspace, model, instructions)
+            except CodexError:
+                if not event.get("recovery") or not thread_id:
+                    raise
+                # A matching marker is insufficient when the native archive
+                # was lost or the SDK has expired the session.
+                thread = client.open_thread(None, self.workspace, model, instructions)
             thread_id = thread["id"]
             self.journal.data["rooms"][event.get("coordination_session", event["room_id"])] = thread_id
             record["thread_id"] = thread_id
@@ -458,7 +513,7 @@ class Bridge:
             recovered = completed_answer(thread, event["event_id"])
             if recovered is not None:
                 return recovered
-            if record.get("status") == "running":
+            if record.get("status") == "running" and not event.get("recovery"):
                 # The original start may have reached the model before a crash.
                 # Do not repeat shell/MCP side effects when history is uncertain.
                 return "Codex execution was interrupted before its result was saved; it was not replayed. Send a new message to continue."
@@ -729,6 +784,15 @@ class Bridge:
 
     def process(self, event_id, record):
         event = record["event"]
+        if event.get("recovery"):
+            return self.process_recovered_task(event_id, record)
+        if event.get("coordination_session", "").startswith("coordination-task:"):
+            from task_recovery import enabled
+            if enabled():
+                self.recover_tasks(event["coordination_session"].split(":", 2)[1])
+                record["status"] = "superseded"
+                self.journal.save()
+                return
         if event.get("control"):
             record["status"] = "completed"
             self.journal.save()
@@ -786,13 +850,63 @@ class Bridge:
             del self.journal.data["events"][old]
         self.journal.save()
 
+    def process_recovered_task(self, event_id, record):
+        from task_recovery import Recovery, RecoveryConflict
+        recovery = Recovery()
+        event = record["event"]
+        identity = event["recovery"]
+        task_id, team = identity["task_id"], identity["team_id"]
+        task = recovery.current(task_id, team)
+        if task is None:
+            record["status"] = "superseded"
+            self.journal.save()
+            return
+        execution = task["execution"]
+        if execution["process_id"] != recovery.process:
+            raise RecoveryConflict("Task execution was replaced")
+        cp = execution.get("checkpoint") or {}
+        if cp.get("delivery") == "delivered":
+            record["status"] = "completed"
+            self.journal.save()
+            return
+        if cp.get("delivery") != "pending":
+            event["body"] = recovery.resume_text({**task, "team_id": team, "spec": identity["spec"]})
+            # A retry must use the latest checkpoint; it must not replay the
+            # interrupted turn against an older native session.
+            if record.get("status") == "running":
+                identity["thread_id"] = None
+            try:
+                answer = self.run_turn(event, record)
+            except BaseException:
+                recovery.interrupted(task_id, team)
+                raise
+            self.persist_codex()
+            saved = recovery.save_reply(task_id, team, answer)
+            cp = saved["execution"]["checkpoint"]
+            self.journal.data.setdefault("task_sessions", {})[team+"/"+task_id] = {
+                "thread_id": record["thread_id"], "runtime": "codex", "expires_at": time.time()+86400,
+                "checkpoint_digest": recovery.digest(cp)}
+            self.journal.save()
+        else:
+            # The Controller revalidates the saved bytes on a repeated claim.
+            snapshot = recovery.discover()
+            entry = next(e for e in snapshot["tasks"] if e["task"]["task_id"] == task_id and e["team_id"] == team)
+            answer = recovery.claim(snapshot, entry)["saved_result"]
+        message_id = self.matrix.send_text(event["room_id"], answer, transaction_key=cp["reply_txn"], progress_only=True)
+        recovery.delivered(task_id, team, message_id)
+        record["status"] = "completed"
+        self.journal.save()
+
     def run(self):
+        # Discover/claim before polling or accepting new Matrix work. A failed
+        # recovery leaves the process blocked and visible to its supervisor.
+        self.recover_tasks()
         threading.Thread(target=self.poll, daemon=True).start()
         while not self.stop.is_set():
             pending = [
                 (key, value)
                 for key, value in list(self.journal.data["events"].items())
-                if value["status"] != "completed"
+                if value["status"] not in {"completed", "superseded"}
             ]
             for event_id, record in pending:
                 if self.stop.is_set():
