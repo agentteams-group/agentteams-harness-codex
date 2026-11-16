@@ -4,8 +4,10 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 
 import yaml
+from agentteams_skill_warnings import check_skill, report_warnings
 
 
 def read_runtime(path: Path) -> dict:
@@ -18,7 +20,7 @@ def read_runtime(path: Path) -> dict:
     return config
 
 
-def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[str, str]:
+def _role(config: dict) -> str:
     member = config["member"]
     role = member.get("role", "standalone").replace("_", "-")
     role = {
@@ -28,6 +30,53 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
     }.get(role, role)
     if role not in {"manager", "leader", "worker", "remote-member"}:
         raise ValueError(f"unsupported Codex role: {role}")
+    return role
+
+
+def sync_assigned_skills(config: dict, home: Path, plugin: Path, builtin_ids=None) -> list[str]:
+    names = set(config.get("desired", {}).get("skills", []))
+    if not names:
+        builtin_ids = set()
+    elif builtin_ids is None:
+        manifest = yaml.safe_load((plugin / "plugin.yaml").read_text())
+        role = _role(config)
+        builtin_ids = {entry["id"] for section in ("manager", "agent", "team")
+                       for entry in manifest.get("skills", {}).get(section, []) if role in entry.get("roles", [])}
+    root = home.parent / "skills"
+    target = home.parent / ".agents" / "skills"
+    target.mkdir(parents=True, exist_ok=True)
+    warnings = []
+    for name in sorted(names - set(builtin_ids)):
+        try:
+            if not name or name in {".", ".."} or "/" in name or "\\" in name:
+                raise ValueError("invalid skill name")
+            source = root / name
+            if not source.resolve().is_relative_to(root.resolve()):
+                raise ValueError("skill path escapes workspace")
+            prefix = os.getenv("AGENTTEAMS_STORAGE_PREFIX")
+            worker = os.getenv("AGENTTEAMS_WORKER_NAME")
+            if prefix and worker:
+                subprocess.run(["mc", "mirror", f"{prefix.rstrip('/')}/agents/{worker}/skills/{name}/", str(source), "--overwrite"],
+                               check=True, capture_output=True, timeout=15)
+            check_skill(source)
+            destination = target / name
+            if not destination.exists():
+                destination.symlink_to(source)
+        except Exception as exc:
+            warnings.append(f"Skill {name}: load failed ({type(exc).__name__})")
+            if name and name not in {".", ".."} and "/" not in name and "\\" not in name:
+                destination = target / name
+                if destination.is_symlink():
+                    destination.unlink()
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "skill-warnings.json").write_text(json.dumps(warnings))
+    report_warnings(warnings)
+    return warnings
+
+
+def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[str, str]:
+    member = config["member"]
+    role = _role(config)
     home.mkdir(parents=True, exist_ok=True)
     workspace.mkdir(parents=True, exist_ok=True)
     desired = config.get("desired", {})
@@ -49,12 +98,6 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
                 if not path.is_relative_to(plugin.resolve()):
                     raise ValueError("skill path escapes TeamHarness package")
                 skills.append(path / "SKILL.md")
-    unsupported_skills = set(desired.get("skills", [])) - selected_ids
-    if unsupported_skills:
-        raise ValueError(
-            "Additional AT Skills are not supported yet: "
-            + ", ".join(sorted(unsupported_skills))
-        )
     # Skills are installed outside the coding checkout so project AGENTS.md
     # remains under the project's control.
     user_skills = home.parent / ".agents" / "skills"
@@ -66,6 +109,7 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
         destination = user_skills / skill.parent.name
         if not destination.exists():
             destination.symlink_to(skill.parent)
+    sync_assigned_skills(config, home, plugin, selected_ids)
     context = [
         (
             (plugin / "prompts/team/TEAMS.md").read_text()
@@ -108,6 +152,8 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
         if not gateway.endswith("/v1"):
             gateway += "/v1"
         lines += [
+            # Responses gateways need not implement Codex's native search tool.
+            'web_search = "disabled"',
             'model_provider = "agentteams"',
             "[model_providers.agentteams]",
             'name = "AgentTeams"',

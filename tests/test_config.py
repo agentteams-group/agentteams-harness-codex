@@ -50,6 +50,25 @@ class ConfigTests(unittest.TestCase):
             tomllib.loads((self.root / ".codex/config.toml").read_text()),
         )
 
+    def test_assigned_skill_failures_do_not_prevent_native_config_and_recover(self):
+        self.config["desired"]["skills"] = ["healthy", "broken", "missing"]
+        for name, content in [("healthy", "# Healthy\n"), ("broken", "---\nname: [broken\n---\n")]:
+            path = self.root / "skills" / name / "SKILL.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        self.prepare()
+        self.assertTrue((self.root / ".agents/skills/healthy/SKILL.md").is_file())
+        self.assertFalse((self.root / ".agents/skills/broken").exists())
+        import json
+        self.assertEqual(len(json.loads((self.root / ".codex/skill-warnings.json").read_text())), 2)
+        for name in ["broken", "missing"]:
+            path = self.root / "skills" / name / "SKILL.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("# Repaired\n")
+        self.prepare()
+        self.assertEqual(json.loads((self.root / ".codex/skill-warnings.json").read_text()), [])
+        self.assertTrue((self.root / ".agents/skills/broken/SKILL.md").is_file())
+
     def test_worker_has_no_leader_skills_and_gateway_keeps_route(self):
         model, prompt, config = self.prepare()
         self.assertEqual(model, "test-model")
@@ -76,6 +95,21 @@ class ConfigTests(unittest.TestCase):
         self.config["member"]["role"] = "worker"
         self.prepare()
         self.assertFalse((self.root / ".agents/skills/delegate").exists())
+
+    def test_gateway_disables_native_web_search_on_every_prepare(self):
+        for _ in range(2):
+            _, _, config = self.prepare()
+            self.assertEqual(config.get("web_search"), "disabled")
+
+    def test_chatgpt_keeps_native_web_search_default(self):
+        self.prepare()
+        with patch.dict(os.environ, {"CODEX_AUTH_MODE": "chatgpt"}, clear=True):
+            prepare(
+                self.config, self.root / ".codex", self.root / "workspace", self.plugin
+            )
+        config = tomllib.loads((self.root / ".codex/config.toml").read_text())
+        self.assertNotIn("web_search", config)
+        self.assertNotIn("model_provider", config)
 
     def test_native_mcp_inherits_at_credentials_by_name(self):
         with patch.dict(
