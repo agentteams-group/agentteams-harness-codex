@@ -431,7 +431,7 @@ class Bridge:
             **os.environ,
             "CODEX_GATEWAY_KEY": os.getenv("CODEX_GATEWAY_KEY") or credential,
         }
-        thread_id = self.journal.data["rooms"].get(event["room_id"])
+        thread_id = self.journal.data["rooms"].get(event.get("coordination_session", event["room_id"]))
         text, image = event["body"], None
         if event["kind"] != "text":
             text, attachment = materialize_attachment(
@@ -452,7 +452,7 @@ class Bridge:
         with Client(self.workspace, env=environment) as client:
             thread = client.open_thread(thread_id, self.workspace, model, instructions)
             thread_id = thread["id"]
-            self.journal.data["rooms"][event["room_id"]] = thread_id
+            self.journal.data["rooms"][event.get("coordination_session", event["room_id"])] = thread_id
             record["thread_id"] = thread_id
             self.journal.save()
             recovered = completed_answer(thread, event["event_id"])
@@ -760,6 +760,7 @@ class Bridge:
                 event, record["answer"], self.agent_ids, self.user_id
             ),
             bool(source),
+            **({"progress_only": True} if event.get("coordination_session") else {}),
         )
         if record.get("direct"):
             self.execution_status(event, "stopped" if record.get("stopped") else "failed" if record.get("error") else "completed", message_id)
@@ -771,6 +772,7 @@ class Bridge:
             record["outputs"],
             [source] if source else [],
             bool(source),
+            **({"progress_only": True} if event.get("coordination_session") else {}),
         )
         record["status"] = "completed"
         trace_event("message.sent", room_id=event["room_id"], event_id=event_id, reply_event_id=message_id)
