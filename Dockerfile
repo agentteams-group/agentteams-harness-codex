@@ -24,6 +24,6 @@ RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir /opt/a
     && ln -s /opt/agentteams/scripts/lib/mc-wrapper.sh /usr/local/bin/mc
 COPY scripts/entrypoint.sh /opt/agentteams/entrypoint.sh
 RUN chmod +x /opt/agentteams/entrypoint.sh
-ENV PYTHONPATH=/opt/agentteams/transport
+ENV PYTHONPATH=/opt/agentteams/scripts/lib:/opt/agentteams/transport
 EXPOSE 8088
 ENTRYPOINT ["/usr/bin/tini", "--", "/opt/agentteams/entrypoint.sh"]
