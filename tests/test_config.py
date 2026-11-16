@@ -77,6 +77,21 @@ class ConfigTests(unittest.TestCase):
         self.prepare()
         self.assertFalse((self.root / ".agents/skills/delegate").exists())
 
+    def test_gateway_disables_native_web_search_on_every_prepare(self):
+        for _ in range(2):
+            _, _, config = self.prepare()
+            self.assertEqual(config.get("web_search"), "disabled")
+
+    def test_chatgpt_keeps_native_web_search_default(self):
+        self.prepare()
+        with patch.dict(os.environ, {"CODEX_AUTH_MODE": "chatgpt"}, clear=True):
+            prepare(
+                self.config, self.root / ".codex", self.root / "workspace", self.plugin
+            )
+        config = tomllib.loads((self.root / ".codex/config.toml").read_text())
+        self.assertNotIn("web_search", config)
+        self.assertNotIn("model_provider", config)
+
     def test_native_mcp_inherits_at_credentials_by_name(self):
         with patch.dict(
             os.environ,

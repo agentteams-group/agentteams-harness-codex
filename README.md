@@ -74,6 +74,8 @@ Control messages from other Agents are rejected. Pending approval IDs expire whe
 
 By default, the adapter uses the Controller-projected gateway URL and gateway key. `CODEX_BASE_URL` and `CODEX_GATEWAY_KEY` are explicit deployment overrides. Keep real keys in deployment secrets, not this repository.
 
+In gateway mode, the generated Codex configuration disables native web search (`web_search = "disabled"`) so Responses gateways that do not implement that tool can accept turns. ChatGPT-account mode keeps Codex's default web-search behavior.
+
 For a trusted developer-only ChatGPT-account test, set `CODEX_AUTH_MODE=chatgpt` and mount a credentials file at `CODEX_AUTH_FILE`. The entrypoint copies it to the private Codex state directory; snapshots exclude it. Model catalog entries do not establish account entitlement: a completed inference turn does.
 
 ## Current limits
