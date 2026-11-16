@@ -116,7 +116,7 @@ class RecoveryTests(unittest.TestCase):
         self.bridge.persist_codex = Mock()
         self.bridge.run_turn.return_value = "Step two done"
         saved = {**cp, "version": 4, "delivery": "pending", "reply_txn": "step-two-reply"}
-        self.recovery.save_reply.return_value = {"execution": {"checkpoint": saved}}
+        self.recovery.prepare_reply.return_value = ({"execution": {"checkpoint": saved}}, "Step two done")
         delivered = {**saved, "version": 5, "delivery": "delivered"}
         self.recovery.delivered.return_value = {"execution": {"checkpoint": delivered}}
         record = {"event": {"room_id": "!task:test", "recovery": {"task_id": "t1", "team_id": "team", "spec": "Three steps"}},

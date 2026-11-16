@@ -894,8 +894,12 @@ class Bridge:
                 recovery.interrupted(task_id, team)
                 raise
             self.persist_codex()
-            saved = recovery.save_reply(task_id, team, answer)
+            saved, answer = recovery.prepare_reply(task_id, team, answer)
             cp = saved["execution"]["checkpoint"]
+            if cp.get("delivery") == "delivered":
+                record["status"] = "completed"
+                self.journal.save()
+                return
         else:
             # The Controller revalidates the saved bytes on a repeated claim.
             snapshot = recovery.discover()
