@@ -223,15 +223,24 @@ class Bridge:
             task = {**task, "team_id": team, "spec": claimed["spec"]}
             event = {"event_id": event_id, "room_id": room, "sender": self.user_id,
                      "kind": "text", "body": recovery.resume_text(task),
+                     "session_source_event_ids": [],
                      "coordination_session": "recovery:" + key,
                      "recovery": {"task_id": task_id, "team_id": team, "thread_id": local_thread, "spec": claimed["spec"]}}
             # Supersede only the same Task's local admission. Other Matrix
             # backlog stays queued and its cursor is never reset.
             for old_id, old in list(self.journal.data["events"].items()):
-                prior = old["event"].get("recovery", {})
-                if (old["event"].get("coordination_session", "").startswith("coordination-task:" + task_id + ":")
-                        or (old_id != event_id and prior.get("task_id") == task_id and prior.get("team_id") == team)):
-                    old["status"] = "superseded"
+                source = old["event"]
+                prior = source.get("recovery", {})
+                if source.get("room_id") != room:
+                    continue
+                if (source.get("coordination_session", "").startswith("coordination-task:" + task_id + ":")
+                        or (prior.get("task_id") == task_id and prior.get("team_id") == team)):
+                    event["session_source_event_ids"].extend(
+                        source_id for source_id in source.get("session_source_event_ids", [old_id])
+                        if source_id.startswith("$"))
+                    if old_id != event_id:
+                        old["status"] = "superseded"
+            event["session_source_event_ids"] = list(dict.fromkeys(event["session_source_event_ids"]))
             self.journal.ingest([event], self.journal.data["cursor"])
 
     def refresh_context(self):

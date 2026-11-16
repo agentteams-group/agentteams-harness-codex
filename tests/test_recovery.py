@@ -42,7 +42,8 @@ class RecoveryTests(unittest.TestCase):
 
     def test_startup_recovers_task_without_new_matrix_input(self):
         self.bridge.journal.ingest([{"event_id": "$unrelated", "body": "keep me"},
-            {"event_id": "$assignment", "coordination_session": "coordination-task:t1:d1"}], "keep-all-backlog")
+            {"event_id": "$assignment", "room_id": "!task:test", "coordination_session": "coordination-task:t1:d1"},
+            {"event_id": "$other-team", "room_id": "!other:test", "coordination_session": "coordination-task:t1:d2"}], "keep-all-backlog")
         self.bridge.recover_tasks()
         events = self.bridge.journal.data["events"]
         recovered = events["recovery:team/t1:2"]["event"]
@@ -51,8 +52,18 @@ class RecoveryTests(unittest.TestCase):
         self.assertIsNone(recovered["recovery"]["thread_id"])
         self.assertEqual(events["$unrelated"]["status"], "queued")
         self.assertEqual(events["$assignment"]["status"], "superseded")
+        self.assertEqual(events["$other-team"]["status"], "queued")
+        self.assertEqual(recovered["session_source_event_ids"], ["$assignment"])
         self.assertEqual(self.bridge.journal.data["cursor"], "keep-all-backlog")
         self.bridge.matrix.send_text.assert_not_called()
+
+    def test_recovery_sources_survive_another_generation_without_synthetic_receipts(self):
+        self.bridge.journal.ingest([{"event_id": "recovery:team/t1:1", "room_id": "!task:test",
+            "session_source_event_ids": ["$assignment", "recovery:team/t1:0"],
+            "recovery": {"task_id": "t1", "team_id": "team"}}], "keep-all-backlog")
+        self.bridge.recover_tasks()
+        recovered = self.bridge.journal.data["events"]["recovery:team/t1:2"]["event"]
+        self.assertEqual(recovered["session_source_event_ids"], ["$assignment"])
 
     def test_matching_local_session_is_selected_but_older_checkpoint_is_not(self):
         session = {"thread_id": "native-thread", "runtime": "codex", "expires_at": 10**12,
