@@ -50,6 +50,25 @@ class ConfigTests(unittest.TestCase):
             tomllib.loads((self.root / ".codex/config.toml").read_text()),
         )
 
+    def test_assigned_skill_failures_do_not_prevent_native_config_and_recover(self):
+        self.config["desired"]["skills"] = ["healthy", "broken", "missing"]
+        for name, content in [("healthy", "# Healthy\n"), ("broken", "---\nname: [broken\n---\n")]:
+            path = self.root / "skills" / name / "SKILL.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        self.prepare()
+        self.assertTrue((self.root / ".agents/skills/healthy/SKILL.md").is_file())
+        self.assertFalse((self.root / ".agents/skills/broken").exists())
+        import json
+        self.assertEqual(len(json.loads((self.root / ".codex/skill-warnings.json").read_text())), 2)
+        for name in ["broken", "missing"]:
+            path = self.root / "skills" / name / "SKILL.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("# Repaired\n")
+        self.prepare()
+        self.assertEqual(json.loads((self.root / ".codex/skill-warnings.json").read_text()), [])
+        self.assertTrue((self.root / ".agents/skills/broken/SKILL.md").is_file())
+
     def test_worker_has_no_leader_skills_and_gateway_keeps_route(self):
         model, prompt, config = self.prepare()
         self.assertEqual(model, "test-model")

@@ -18,7 +18,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .client import Client, CodexError, completed_answer
-from .config import prepare, read_runtime
+from .config import prepare, read_runtime, sync_assigned_skills
 try:
     from runtime_observability import event as trace_event
 except ImportError:
@@ -203,6 +203,7 @@ class Bridge:
             self.agent_ids = manager_allowed_senders(self.runtime_path, domain) - {f"@{os.getenv('AGENTTEAMS_ADMIN_USER', 'admin')}:{domain}"}
         if not self.rooms:
             raise ValueError("runtime.yaml has no Matrix rooms")
+        sync_assigned_skills(self.config, self.home, self.plugin)
 
     def persist_codex(self, *, include_workspace=True):
         prefix = os.getenv("AGENTTEAMS_STORAGE_PREFIX")
@@ -338,6 +339,9 @@ class Bridge:
                         self.refresh_context()
                     else:
                         temporary.unlink()
+                        warnings = self.home / "skill-warnings.json"
+                        if warnings.is_file() and json.loads(warnings.read_text()):
+                            sync_assigned_skills(self.config, self.home, self.plugin)
                 cursor = self.journal.data["cursor"]
                 stage = "matrix.sync"
                 payload = self.matrix.sync(cursor or None, 1000)
