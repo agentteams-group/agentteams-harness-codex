@@ -108,6 +108,8 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
         if not gateway.endswith("/v1"):
             gateway += "/v1"
         lines += [
+            # Responses gateways need not implement Codex's native search tool.
+            'web_search = "disabled"',
             'model_provider = "agentteams"',
             "[model_providers.agentteams]",
             'name = "AgentTeams"',
