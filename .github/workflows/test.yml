@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: agentscope-ai/AgentTeams
-          ref: f48a6de1ab52d5c16245ea715b683bb0eed8a622
+          ref: d50d6f9d7e67bcd89951ed924f3b2a1ebd2b7d47
           path: at
           submodules: recursive
       - uses: actions/setup-python@v5
