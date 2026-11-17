@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import urllib.parse
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .client import Client, CodexError, completed_answer
@@ -27,7 +28,10 @@ except ImportError:
 
 # The transport and file helpers are consumed unchanged from a pinned AT
 # commit. Runtime execution and Codex state belong to this repository.
-from matrix_channel import MatrixClient, matrix_events
+from matrix_channel import MatrixClient, matrix_events, matrix_transaction_id
+from task_recovery import RecoveryConflict, RecoveryUnavailable
+from worker_matrix_raw import publish_raw_saved
+from worker_sessions import WorkerSessions
 from matrix_bridge import (
     materialize_attachment,
     snapshot_outbox,
@@ -167,6 +171,43 @@ def restore_codex(archive, home):
         source.extractall(home)
 
 
+def rollout_digest(home, thread_id):
+    """Read the native persisted rollout. A journal entry alone cannot select a thread."""
+    if not thread_id:
+        return None
+    try:
+        if str(uuid.UUID(thread_id)) != thread_id:
+            return None
+    except (ValueError, TypeError, AttributeError):
+        return None
+    files = list((home / "sessions").rglob(f"rollout-*-{thread_id}.jsonl"))
+    if len(files) != 1:
+        return None
+    try:
+        with files[0].open("rb") as rollout:
+            first = rollout.readline()
+            meta = json.loads(first)
+            if meta.get("type") != "session_meta" or meta.get("payload", {}).get("id") != thread_id:
+                return None
+            digest = hashlib.sha256(first)
+            for block in iter(lambda: rollout.read(1024 * 1024), b""):
+                digest.update(block)
+            return digest.hexdigest()
+    except (OSError, ValueError):
+        return None
+
+
+def task_thread(home, recovery, task, work):
+    sessions = WorkerSessions("codex", recovery=recovery)
+    view = sessions.load(work)
+    execution = task["execution"]
+    if (view["generation"] != execution["generation"] or view["instance_id"] != execution["instance_id"]
+            or view["checkpoint_digest"] != recovery.digest(execution.get("checkpoint"))):
+        raise RecoveryConflict("Task changed before Codex thread selection")
+    ref = (view.get("cache") or {}).get("native_ref")
+    return (ref if sessions.usable(view, ref, rollout_digest(home, ref)) else None), view
+
+
 class Bridge:
     def __init__(self):
         self.name = os.environ["AGENTTEAMS_WORKER_NAME"]
@@ -193,11 +234,22 @@ class Bridge:
         self.config = read_runtime(self.runtime_path)
         self.refresh_context()
 
+    def deliver_task(self, recovery, task_id, team, room, execution, text):
+        def bind(cp):
+            actual = recovery.checkpoint(task_id, team, cp)["execution"]
+            if (actual["state"] != "active" or actual["checkpoint"] != cp
+                    or any(actual[key] != execution[key] for key in ("instance_id", "generation", "process_id"))):
+                raise RecoveryConflict("Codex Task changed before Matrix device binding")
+        return publish_raw_saved(self.matrix, room, text, execution["checkpoint"], self.user_id, bind,
+            content={"org.agentteams.progress_only": True}, legacy_transaction_id=matrix_transaction_id)
+
     def recover_tasks(self, only_task=None):
         from task_recovery import Recovery, enabled
         if not enabled() or self.config.get("member", {}).get("role") == "manager":
             return
-        recovery = Recovery()
+        from worker_matrix_state import WorkerMatrix
+        recovery = Recovery(device_delivery=True)
+        WorkerMatrix("codex", recovery=recovery).start()
         snapshot = recovery.discover()
         for entry in snapshot["tasks"]:
             task_id, team = entry["task"]["task_id"], entry["team_id"]
@@ -206,12 +258,15 @@ class Bridge:
             claimed = recovery.claim(snapshot, entry)
             task = claimed["task"]
             execution = task["execution"]
+            if execution["state"] == "needs_verification":
+                trace_event("task.recovery.verify", team_id=team, task_id=task_id, generation=execution["generation"])
+                continue
             cp = execution.get("checkpoint") or {}
             room = task.get("room_id")
             if not room:
                 raise ValueError("Recoverable Task has no Matrix room")
             if cp.get("delivery") == "pending":
-                event_id = self.matrix.send_text(room, claimed["saved_result"], transaction_key=cp["reply_txn"], progress_only=True)
+                event_id = self.deliver_task(recovery, task_id, team, room, execution, claimed["saved_result"])
                 recovery.delivered(task_id, team, event_id)
                 task = recovery.current(task_id, team)
                 if task is None:
@@ -221,15 +276,14 @@ class Bridge:
             if task["status"] == "submitted":
                 continue
             key = team + "/" + task_id
-            session = self.journal.data.get("task_sessions", {}).get(key)
-            local_thread = session.get("thread_id") if recovery.session_usable(session, task, "codex") else None
             event_id = "recovery:" + key + ":" + str(execution["generation"])
             task = {**task, "team_id": team, "spec": claimed["spec"]}
             event = {"event_id": event_id, "room_id": room, "sender": self.user_id,
                      "kind": "text", "body": recovery.resume_text(task),
                      "session_source_event_ids": [],
                      "coordination_session": "recovery:" + key,
-                     "recovery": {"task_id": task_id, "team_id": team, "thread_id": local_thread, "spec": claimed["spec"]}}
+                     "recovery": {"task_id": task_id, "team_id": team, "thread_id": None, "spec": claimed["spec"],
+                                  **{k: execution[k] for k in ("instance_id", "generation", "process_id")}}}
             # Supersede only the same Task's local admission. Other Matrix
             # backlog stays queued and its cursor is never reset.
             for old_id, old in list(self.journal.data["events"].items()):
@@ -510,11 +564,6 @@ class Bridge:
                 image = attachment
         trace_event("inference.begin", model=model, room_id=event["room_id"], event_id=event["event_id"], layer="agent_turn")
         with Client(self.workspace, env=environment) as client:
-            if event.get("recovery") and record.get("status") == "running" and record.get("thread_id"):
-                previous = client.request("thread/read", {"threadId": record["thread_id"], "includeTurns": True})["thread"]
-                recovered = completed_answer(previous, event["event_id"])
-                if recovered is not None:
-                    return recovered
             try:
                 thread = client.open_thread(thread_id, self.workspace, model, instructions)
             except CodexError:
@@ -869,7 +918,7 @@ class Bridge:
 
     def process_recovered_task(self, event_id, record):
         from task_recovery import Recovery, RecoveryConflict
-        recovery = Recovery()
+        recovery = Recovery(device_delivery=True)
         event = record["event"]
         identity = event["recovery"]
         task_id, team = identity["task_id"], identity["team_id"]
@@ -879,19 +928,30 @@ class Bridge:
             self.journal.save()
             return
         execution = task["execution"]
-        if execution["process_id"] != recovery.process:
-            raise RecoveryConflict("Task execution was replaced")
+        if (execution["runtime"] != "codex" or execution["process_id"] != recovery.process
+                or any(identity.get(k) != execution[k] for k in ("instance_id", "generation", "process_id"))):
+            record["status"] = "superseded"
+            self.journal.save()
+            return
+        if execution["state"] == "needs_verification":
+            record["status"] = "superseded"
+            self.journal.save()
+            return
         cp = execution.get("checkpoint") or {}
         if cp.get("delivery") == "delivered" and (task["status"] == "submitted" or record.get("reply_txn") == cp.get("reply_txn")):
             record["status"] = "completed"
             self.journal.save()
             return
+        work = {"kind": "task", "task_id": task_id, "team_id": team}
+        selection = None
         if cp.get("delivery") != "pending":
-            event["body"] = recovery.resume_text({**task, "team_id": team, "spec": identity["spec"]})
-            # A retry must use the latest checkpoint; it must not replay the
-            # interrupted turn against an older native session.
+            if execution["state"] != "active":
+                raise RecoveryConflict("Codex Task execution is not active")
             if record.get("status") == "running":
-                identity["thread_id"] = None
+                recovery.interrupted(task_id, team)
+                return
+            identity["thread_id"], selection = task_thread(self.home, recovery, task, work)
+            event["body"] = recovery.resume_text({**task, "team_id": team, "spec": identity["spec"]})
             try:
                 answer = self.run_turn(event, record)
             except BaseException:
@@ -908,17 +968,27 @@ class Bridge:
             # The Controller revalidates the saved bytes on a repeated claim.
             snapshot = recovery.discover()
             entry = next(e for e in snapshot["tasks"] if e["task"]["task_id"] == task_id and e["team_id"] == team)
-            answer = recovery.claim(snapshot, entry)["saved_result"]
+            saved = recovery.claim(snapshot, entry)
+            cp = saved["execution"]["checkpoint"]
+            answer = saved["saved_result"]
         record["reply_txn"] = cp["reply_txn"]
         self.journal.save()
-        message_id = self.matrix.send_text(event["room_id"], answer, transaction_key=cp["reply_txn"], progress_only=True)
+        message_id = self.deliver_task(recovery, task_id, team, event["room_id"], saved["execution"], answer)
         saved = recovery.delivered(task_id, team, message_id)
-        if record.get("thread_id"):
-            self.journal.data.setdefault("task_sessions", {})[team+"/"+task_id] = {
-                "thread_id": record["thread_id"], "runtime": "codex", "expires_at": time.time()+86400,
-                "checkpoint_digest": recovery.digest(saved["execution"]["checkpoint"])}
         record["status"] = "completed"
         self.journal.save()
+        if selection and saved.get("task", {}).get("status") != "submitted":
+            native_ref = record.get("thread_id")
+            digest = rollout_digest(self.home, native_ref)
+            if digest:
+                try:
+                    sessions = WorkerSessions("codex", recovery=recovery)
+                    view = sessions.load(work)
+                    if (view["config_generation"] == selection["config_generation"]
+                            and view["checkpoint_digest"] == recovery.digest(saved["execution"]["checkpoint"])):
+                        sessions.remember(work, view, identity, native_ref, digest, int(time.time()) + 86400)
+                except (RecoveryConflict, RecoveryUnavailable) as exc:
+                    trace_event("task.recovery.cache_skipped", task_id=task_id, error_type=type(exc).__name__)
 
     def run(self):
         # Discover/claim before polling or accepting new Matrix work. A failed

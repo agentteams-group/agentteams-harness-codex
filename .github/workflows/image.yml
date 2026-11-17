@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: agentscope-ai/AgentTeams
-          ref: eb52bf70d0a33c848fe6a4af72833ec553cc5ce8
+          ref: ff3e3d5af261133d58b1567c4baa9a2ac01ddb41
           path: at-input
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
