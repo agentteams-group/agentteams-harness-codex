@@ -19,6 +19,7 @@ COPY --from=at /plugins/teamharness/ /opt/agentteams/plugins/teamharness/
 COPY --from=at /LICENSE /usr/share/licenses/agentteams/LICENSE
 COPY pyproject.toml /opt/agentteams/codex/pyproject.toml
 COPY src/ /opt/agentteams/codex/src/
+COPY configs/requirements.toml /etc/codex/requirements.toml
 RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir /opt/agentteams/codex \
     && chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh \
     && ln -s /opt/agentteams/scripts/lib/mc-wrapper.sh /usr/local/bin/mc

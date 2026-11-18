@@ -177,7 +177,7 @@ class Client:
         self.close()
 
 
-def completed_answer(thread, event_id):
+def completed_answer(thread, event_id, *, terminal_only=False):
     """Recover only terminal turns belonging to this Matrix event."""
     marker = f"[AgentTeams event {event_id}]"
     for turn in reversed(thread.get("turns", [])):
@@ -196,5 +196,7 @@ def completed_answer(thread, event_id):
                 and item.get("phase") != "commentary"
             )
             return answer or "Codex completed the task."
+        if terminal_only:
+            return None
         return f"Codex turn {turn.get('id', '')} was {status}; execution was not replayed. Send a new message to continue."
     return None

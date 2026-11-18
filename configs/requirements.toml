@@ -1,0 +1,2 @@
+[[hooks.PreToolUse]]
+hooks = [{type = "command", command = "/opt/venv/bin/python -m agentteams_codex.tool_hook", timeout = 120}]
