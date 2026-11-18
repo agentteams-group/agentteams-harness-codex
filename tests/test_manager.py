@@ -61,3 +61,42 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(actionable_events(*args, allowed_senders={'@admin:local'}), [])
         event['content']['m.mentions'] = {}
         self.assertEqual(actionable_events(*args, allowed_senders={'@worker:local'}), [])
+
+    def test_sync_keeps_pending_input_and_skips_terminal_reply_from_previous_harness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / 'runtime.yaml'
+            runtime.write_text('member:\n  runtime: codex\n  role: manager\n  personalRoomId: "!dm:local"\n')
+            with patch.dict(os.environ, {'AGENTTEAMS_WORKER_NAME': 'manager',
+                'AGENTTEAMS_AGENT_ROLE': 'manager', 'TEAMHARNESS_RUNTIME_CONFIG': str(runtime),
+                'TEAMHARNESS_WORKSPACE': str(root / 'workspace'), 'CODEX_HOME': str(root / '.codex'),
+                'AGENTTEAMS_MATRIX_URL': 'http://matrix', 'AGENTTEAMS_WORKER_MATRIX_TOKEN': 'test-token',
+                'AGENTTEAMS_MATRIX_DOMAIN': 'local', 'AGENTTEAMS_ADMIN_USER': 'admin',
+                'AGENTTEAMS_LOG_DIR': str(root / 'logs')}, clear=True):
+                bridge = Bridge()
+                def user_input(event_id):
+                    return {'type': 'm.room.message', 'sender': '@admin:local', 'event_id': event_id,
+                            'content': {'msgtype': 'm.text', 'body': 'run the task'}}
+                def receipt(event_id, status, sender='@manager:local'):
+                    kind = 'com.agentteams.session_receipt'
+                    return {'type': kind, 'sender': sender, 'content': {
+                        'status': status, 'version': 1, 'm.relates_to': {'rel_type': kind, 'event_id': event_id}}}
+                bridge.journal.ingest([{
+                    'event_id': '$queued', 'room_id': '!dm:local', 'sender': '@admin:local', 'body': 'old pending',
+                }], 'old-cursor')
+                events = [user_input('$already-done'), user_input('$still-pending'),
+                          receipt('$already-done', 'completed'), receipt('$queued', 'completed'),
+                          receipt('$still-pending', 'read'),
+                          receipt('$still-pending', 'completed', sender='@another:local')]
+                def sync(*args):
+                    bridge.stop.set()
+                    return {'next_batch': 'new-cursor', 'rooms': {'join': {
+                        '!dm:local': {'timeline': {'events': events}},
+                    }}}
+                bridge.matrix.sync = Mock(side_effect=sync)
+                bridge.poll()
+                self.assertNotIn('$already-done', bridge.journal.data['events'])
+                self.assertEqual(bridge.journal.data['events']['$queued']['status'], 'completed')
+                self.assertEqual(bridge.journal.data['events']['$still-pending']['status'], 'queued')
+                self.assertEqual(bridge.journal.data['cursor'], 'new-cursor')
+                self.assertTrue(bridge.scan_ready.is_set())

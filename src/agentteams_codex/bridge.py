@@ -30,6 +30,7 @@ except ImportError:
 
 # The transport and file helpers are consumed unchanged from a pinned AT
 # commit. Runtime execution and Codex state belong to this repository.
+from agentteams_receipts import Receipts, completed_turns
 from matrix_channel import MatrixClient, matrix_events, matrix_transaction_id
 from task_recovery import RecoveryConflict, RecoveryUnavailable
 from worker_matrix_delivery import confirm_bound
@@ -124,8 +125,12 @@ class Journal:
                     f"{prefix}/agents/{os.environ['AGENTTEAMS_WORKER_NAME']}/runtime/{self.path.name}",
                 )
 
-    def ingest(self, events, cursor):
+    def ingest(self, events, cursor, completed=()):
         with self.lock:
+            for room, event_id in completed:
+                record = self.data["events"].get(event_id)
+                if record and record["event"]["room_id"] == room:
+                    record["status"] = "completed"
             for event in events:
                 self.data["events"].setdefault(
                     event["event_id"], {"event": event, "status": "queued"}
@@ -207,6 +212,8 @@ class Bridge:
         self.config = read_runtime(self.runtime_path)
         self.refresh_context()
         self.managed = ManagedMatrix(self, actionable_events) if managed_worker() else None
+        self.manager_receipts = (Receipts(self.home.parent)
+            if self.config.get("member", {}).get("role") == "manager" else None)
         self.scan_ready = threading.Event()
         self.handoff_scanned = False
 
@@ -489,9 +496,11 @@ class Bridge:
                         if cursor
                         else []
                     )
+                    completed = completed_turns(payload, self.user_id) if self.manager_receipts else ()
                     queued = []
                     for event in events:
-                        if event["event_id"] in self.journal.data["events"]:
+                        if ((event["room_id"], event["event_id"]) in completed
+                                or event["event_id"] in self.journal.data["events"]):
                             continue
                         policy = self.config.get("desired", {}).get("channelPolicy", {})
                         deny = (
@@ -514,7 +523,8 @@ class Bridge:
                             queued.append({**event, "control": True})
                         else:
                             queued.append(event)
-                    self.journal.ingest(queued, payload.get("next_batch", cursor))
+                    self.journal.ingest(queued, payload.get("next_batch", cursor), completed)
+                    self.scan_ready.set()
                 for received in queued:
                     trace_event("message.received", room_id=received["room_id"], event_id=received["event_id"], sender=received["sender"])
                 if not self.last_sync:
@@ -970,6 +980,8 @@ class Bridge:
             bool(source),
             **({"progress_only": True} if event.get("coordination_session") else {}),
         )
+        if getattr(self, "manager_receipts", None) and message_id and not record.get("error") and not record.get("stopped"):
+            self.manager_receipts.enqueue(event["room_id"], event_id, "completed")
         record["status"] = "completed"
         trace_event("message.sent", room_id=event["room_id"], event_id=event_id, reply_event_id=message_id)
         # Retain bounded replay protection; pending events are never pruned.
@@ -1062,7 +1074,7 @@ class Bridge:
         # recovery leaves the process blocked and visible to its supervisor.
         self.recover_tasks()
         threading.Thread(target=self.poll, daemon=True).start()
-        if self.managed:
+        if self.managed or self.manager_receipts:
             while not self.stop.is_set() and not self.scan_ready.wait(0.5):
                 continue
         next_discovery = time.monotonic() + 5
@@ -1102,8 +1114,9 @@ def main():
         raise RuntimeError("Codex bridge does not support Matrix E2EE")
     bridge = Bridge()
     if not bridge.managed:
-        from agentteams_receipts import Receipts, serve
-        threading.Thread(target=serve, args=(Receipts(bridge.home.parent), "codex"), daemon=True).start()
+        from agentteams_receipts import serve
+        receipts = bridge.manager_receipts or Receipts(bridge.home.parent)
+        threading.Thread(target=serve, args=(receipts, "codex"), daemon=True).start()
 
     class Health(BaseHTTPRequestHandler):
         def do_GET(self):
