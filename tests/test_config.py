@@ -150,6 +150,8 @@ class ConfigTests(unittest.TestCase):
             {
                 "AGENTTEAMS_WORKER_MATRIX_TOKEN": "test-only-token",
                 "MC_HOST_storage": "test-only-storage",
+                "PYTHONPATH": "/opt/agentteams/scripts/lib:/opt/agentteams/transport",
+                "UNRELATED_SECRET": "test-only-secret",
             },
             clear=True,
         ):
@@ -160,6 +162,9 @@ class ConfigTests(unittest.TestCase):
         config = tomllib.loads(raw)["mcp_servers"]["teamharness"]
         self.assertIn("AGENTTEAMS_WORKER_MATRIX_TOKEN", config["env_vars"])
         self.assertIn("MC_HOST_storage", config["env_vars"])
+        self.assertIn("PYTHONPATH", config["env_vars"])
+        self.assertNotIn("UNRELATED_SECRET", config["env_vars"])
+        self.assertNotIn("/opt/agentteams/scripts/lib", raw)
         self.assertNotIn("test-only-token", raw)
         self.assertEqual(
             config["env"]["TEAMHARNESS_SHARED_DIR"], str(self.root / "workspace/shared")

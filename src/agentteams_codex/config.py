@@ -198,7 +198,7 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
             sorted(
                 name
                 for name in os.environ
-                if name.startswith(("AGENTTEAMS_", "TEAMHARNESS_", "MC_"))
+                if name == "PYTHONPATH" or name.startswith(("AGENTTEAMS_", "TEAMHARNESS_", "MC_"))
             )
         ),
     ]
