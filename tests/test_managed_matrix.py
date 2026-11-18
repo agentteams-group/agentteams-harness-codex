@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 root = Path(os.environ["AT_SOURCE"])
 sys.path[:0] = [str(Path(__file__).resolve().parents[1] / "src"),
                 str(root / "deepseek-harness/scripts") if (root / "deepseek-harness").exists() else str(root)]
-from agentteams_codex.bridge import Journal
+from agentteams_codex.bridge import Journal, actionable_events
 from agentteams_codex.managed_matrix import ManagedMatrix
 from agentteams_codex.tool_hook import checkpoint_tool, confirm_native_tool
 from agentteams_receipts import Receipts
@@ -18,6 +18,35 @@ from worker_matrix_state import matrix_event_key
 
 
 class ManagedTests(unittest.TestCase):
+    def test_restored_input_obeys_current_room_sender_policy(self):
+        matrix = ManagedMatrix.__new__(ManagedMatrix)
+        room, direct = "!team:test", "!personal:test"
+        matrix.joined = {room, direct}
+        matrix.decode = actionable_events
+        transport = {"groupPolicy": "allowlist", "groupAllowFrom": ["@leader:test"],
+                     "dm": {"policy": "allowlist", "allowFrom": ["@owner:test"]}}
+        matrix.bridge = Mock(user_id="@worker:test", agent_ids={"@leader:test"},
+                             rooms={room: "team", direct: "personal"},
+                             config={"matrix": {"transport": transport}})
+        message = {"event_id": "$old", "type": "m.room.message",
+                   "content": {"body": "Continue", "msgtype": "m.text", "m.mentions": {"user_ids": ["@worker:test"]}}}
+        with patch.dict(os.environ, {"AGENTTEAMS_MATRIX_DOMAIN": "test"}):
+            self.assertIsNone(matrix.classify(room, {**message, "sender": "@owner:test"}))
+            self.assertEqual(matrix.classify(room, {**message, "sender": "@leader:test"}), ("message", None))
+            self.assertIsNone(matrix.classify(direct, {**message, "sender": "@leader:test"}))
+            self.assertEqual(matrix.classify(direct, {**message, "sender": "@owner:test"}), ("message", None))
+            transport["groupAllowFrom"] = ["*"]
+            self.assertEqual(matrix.classify(room, {**message, "sender": "@owner:test"}), ("message", None))
+            transport["groupPolicy"] = "disabled"
+            self.assertIsNone(matrix.classify(room, {**message, "sender": "@owner:test"}))
+            packet = {**message, "sender": "@controller:test",
+                      "content": {**message["content"], "org.agentteams.coordination": {"id": "signed"}}}
+            with patch("task_coordination.notification", return_value={"text": "Task assignment", "session_id": "coordination-task:T:assign"}) as verified:
+                self.assertEqual(matrix.classify(room, packet), ("task_notification", "T"))
+                verified.assert_called_once()
+            with patch("task_coordination.notification", side_effect=ValueError("wrong sender")):
+                self.assertIsNone(matrix.classify(room, packet))
+
     def test_media_stages_stable_bytes_and_requires_a_confirmed_matrix_event(self):
         event = {"room_id": "!room:test", "sender": "@manager:test", "event_id": "$source"}
         for response in ("$media", ""):

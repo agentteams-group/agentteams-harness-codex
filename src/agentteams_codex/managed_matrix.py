@@ -50,14 +50,24 @@ class ManagedMatrix:
             return None
         bridge = self.bridge
         policy = bridge.config.get("desired", {}).get("channelPolicy", {})
-        deny_key = "groupDenyExtra" if bridge.rooms[room] == "team" else "dmDenyExtra"
+        personal = bridge.rooms[room] == "personal"
+        deny_key = "dmDenyExtra" if personal else "groupDenyExtra"
         domain = os.environ["AGENTTEAMS_MATRIX_DOMAIN"]
         denied = {value if value == "*" or (value.startswith("@") and ":" in value)
                   else f"@{value.lstrip('@')}:{domain}" for value in policy.get(deny_key, [])}
         if "*" in denied or raw.get("sender") in denied:
             return None
+        transport = bridge.config.get("matrix", {}).get("transport", {})
+        dm = transport.get("dm") or {}
+        sender_policy = dm.get("policy") if personal else transport.get("groupPolicy")
+        allow = (dm.get("allowFrom") if personal else transport.get("groupAllowFrom")) or []
+        allowed = None
+        if sender_policy == "disabled":
+            allowed = set()
+        elif sender_policy and sender_policy != "open" and "*" not in allow:
+            allowed = set(allow)
         payload = {"rooms": {"join": {room: {"timeline": {"events": [raw]}}}}}
-        events = self.decode(payload, bridge.rooms, bridge.user_id, bridge.agent_ids)
+        events = self.decode(payload, bridge.rooms, bridge.user_id, bridge.agent_ids, allowed)
         return events[0] if events else None
 
     def classify(self, room, raw):
