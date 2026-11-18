@@ -1101,6 +1101,9 @@ def main():
     if os.getenv("AGENTTEAMS_MATRIX_E2EE", "0").lower() in {"1", "true"}:
         raise RuntimeError("Codex bridge does not support Matrix E2EE")
     bridge = Bridge()
+    if not bridge.managed:
+        from agentteams_receipts import Receipts, serve
+        threading.Thread(target=serve, args=(Receipts(bridge.home.parent), "codex"), daemon=True).start()
 
     class Health(BaseHTTPRequestHandler):
         def do_GET(self):

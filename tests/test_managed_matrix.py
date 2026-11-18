@@ -12,10 +12,37 @@ sys.path[:0] = [str(Path(__file__).resolve().parents[1] / "src"),
 from agentteams_codex.bridge import Journal
 from agentteams_codex.managed_matrix import ManagedMatrix
 from agentteams_codex.tool_hook import checkpoint_tool, confirm_native_tool
+from agentteams_receipts import Receipts
+from task_recovery import RecoveryConflict
 from worker_matrix_state import matrix_event_key
 
 
 class ManagedTests(unittest.TestCase):
+    def test_receipts_follow_the_authenticated_worker_transport(self):
+        with tempfile.TemporaryDirectory() as directory:
+            managed = ManagedMatrix.__new__(ManagedMatrix)
+            managed.receipts = Receipts(directory)
+            managed.bridge = Mock(user_id="@worker:test", rooms={}, config={}, agent_ids=set())
+            managed.bridge.matrix.request.return_value = {"joined_rooms": ["!room:test"]}
+            event = {"sender": "@human:test", "event_id": "$source", "type": "m.room.message"}
+            joined = {"timeline": {"events": [event, {**event, "sender": "@worker:test", "event_id": "$own"}]}}
+            managed.observe({"rooms": {"join": {"!room:test": joined, "!left:test": joined}}})
+            managed.raw = Mock()
+            managed.raw.poll.side_effect = RecoveryConflict("credential no longer belongs to this Worker")
+            with self.assertRaises(RecoveryConflict):
+                managed.poll()
+            self.assertEqual(managed.bridge.matrix.request.call_count, 1)
+            managed.raw.poll.side_effect = None
+            managed.raw.poll.return_value = ({"state": {"pending": [], "rooms": {}}}, {})
+            replacement = Mock()
+            managed.bridge.matrix = replacement
+            managed.poll()
+            sent = replacement.request.call_args.args
+            self.assertEqual((sent[0], sent[2]["status"], sent[2]["m.relates_to"]["event_id"]), ("PUT", "received", "$source"))
+            managed.receipts.committed(["$source"])
+            managed.poll()
+            self.assertEqual([call.args[2]["status"] for call in replacement.request.call_args_list], ["received", "read"])
+
     def test_private_admission_needs_verification_before_new_work(self):
         with tempfile.TemporaryDirectory() as directory:
             bridge = Mock()

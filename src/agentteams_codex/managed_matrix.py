@@ -34,6 +34,12 @@ class ManagedMatrix:
         self.joined = set(bridge.matrix.request("GET", "/_matrix/client/v3/joined_rooms")["joined_rooms"])
         for room in self.joined:
             bridge.rooms.setdefault(room, "team")
+        for room, data in payload.get("rooms", {}).get("join", {}).items():
+            if room not in self.joined:
+                continue
+            for event in data.get("timeline", {}).get("events", []):
+                if event.get("type") == "m.room.message" and event.get("sender") != bridge.user_id:
+                    self.receipts.enqueue(room, event.get("event_id", ""), "received")
         return self.joined
 
     def event(self, room, raw):
@@ -95,6 +101,9 @@ class ManagedMatrix:
     def poll(self):
         self.raw.client = self.bridge.matrix
         snapshot, failures = self.raw.poll()
+        # The raw poll verified the bound Worker's account and device. Flush
+        # through that same transport, including after credential rotation.
+        self.receipts.flush(self.raw.client.request)
         events = []
         for key in snapshot["state"]["pending"]:
             item = self.matrix.input(key)

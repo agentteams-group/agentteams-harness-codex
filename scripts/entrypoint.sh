@@ -44,6 +44,4 @@ if [ "${CODEX_AUTH_MODE:-gateway}" = chatgpt ] && { [ -z "${AGENTTEAMS_CONTROLLE
     chmod 600 "${CODEX_HOME}/auth.json"
 fi
 export PYTHONPATH="/opt/agentteams/scripts/lib:/opt/agentteams/transport${PYTHONPATH:+:${PYTHONPATH}}"
-export AGENTTEAMS_CODEX_NATIVE_INPUTS=1
-python3 /opt/agentteams/scripts/lib/agentteams_receipts.py serve --runtime codex --workspace "${WORKER_HOME}" &
 exec /opt/venv/bin/agentteams-codex
