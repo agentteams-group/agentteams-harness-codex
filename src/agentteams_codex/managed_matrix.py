@@ -2,16 +2,19 @@
 import hashlib
 import json
 import os
+from pathlib import Path
+import shutil
+import tempfile
 import time
-from urllib.parse import quote
 
 from agentteams_receipts import Receipts
 from matrix_channel import matrix_transaction_id
+from matrix_bridge import (changed_outbox_files, reply_mention_user_ids, snapshot_outbox,
+                           source_agent_reply_user_id, workspace_output_path)
 from task_recovery import Recovery, RecoveryConflict
 from worker_matrix_delivery import confirm_bound
-from worker_matrix_raw import publish_raw_saved
+from worker_matrix_raw import RawWorkerSync, publish_raw_saved, raw_room_history, require_unencrypted_room
 from worker_sessions import WorkerSessions
-from worker_matrix_raw import RawWorkerSync
 from worker_matrix_state import WorkerMatrix, matrix_event_key
 
 from .native_input import commit_source, rollout_digest
@@ -112,6 +115,7 @@ class ManagedMatrix:
             room = item["room_id"]
             if room not in self.joined or snapshot["state"]["rooms"].get(room, {}).get("gaps"):
                 continue
+            self.raw.require_room(room)
             raw = {**item["input"], "room_id": room, "event_id": item["event_id"]}
             event = self.event(room, raw)
             if not event:
@@ -184,36 +188,6 @@ class ManagedMatrix:
             self.receipts.enqueue(room, item["event_id"], "received")
             self.receipts.committed([item["event_id"]])
 
-    def history(self, room, source):
-        path = f"/_matrix/client/v3/rooms/{quote(room, safe='')}/context/{quote(source, safe='')}?limit=20"
-        page = self.bridge.matrix.request("GET", path)
-        if (page.get("event") or {}).get("event_id") != source:
-            raise RecoveryConflict("Cannot establish Codex room context at the source event")
-        history = []
-        for event in reversed(page.get("events_before", [])):
-            if event.get("room_id", room) != room or event.get("type") != "m.room.message":
-                continue
-            content = event.get("content", {})
-            if content.get("msgtype") != "m.text":
-                continue
-            if event.get("sender") == self.bridge.user_id:
-                parent = content.get("m.relates_to", {}).get("m.in_reply_to", {}).get("event_id")
-                prior = self.matrix.input(matrix_event_key(room, parent)) if parent else None
-                cp = ((prior or {}).get("execution") or {}).get("checkpoint") or {}
-                if (cp.get("reply_event") != event["event_id"]
-                        or (cp.get("result") or {}).get("sha256") != hashlib.sha256(content["body"].encode()).hexdigest()):
-                    continue
-                source_event = {**prior["input"], "event_id": parent, "room_id": room}
-            else:
-                prior = self.matrix.input(matrix_event_key(room, event["event_id"]))
-                if (not prior or prior["intent"] != "message" or prior["input"]["sender"] != event.get("sender")
-                        or prior["input"]["content"] != content):
-                    continue
-                source_event = event
-            if self.event(room, source_event):
-                history.append({"sender": event["sender"], "event_id": event["event_id"], "text": content["body"]})
-        return history
-
     def remember_message(self, event, thread_id):
         identity = event["message_execution"]
         work = {"kind": "message", "event_key": identity["event_key"]}
@@ -224,6 +198,44 @@ class ManagedMatrix:
             digest = rollout_digest(self.bridge.home, thread_id)
             if digest:
                 sessions.remember(work, view, identity, thread_id, digest, int(time.time()) + 86400)
+
+    def save_outputs(self, identity, event, answer, outputs):
+        """Save immutable bytes before the first upload. Ambiguous sends stay fenced."""
+        bridge = self.bridge
+        if not outputs:
+            return self.matrix.message_save_reply(identity, answer)
+        room, event_id = event["room_id"], event["event_id"]
+        source = source_agent_reply_user_id(event, bridge.agent_ids, bridge.user_id)
+        client = bridge.matrix
+        account = client.request("GET", "/_matrix/client/v3/account/whoami")
+        if account.get("user_id") != bridge.user_id or not account.get("device_id"):
+            raise RecoveryConflict("Matrix attachment credential belongs to a different Worker")
+        require_unencrypted_room(client, room)
+        with tempfile.TemporaryDirectory() as directory:
+            files, calls = [], []
+            for relative in outputs:
+                original = workspace_output_path(bridge.workspace, relative)
+                path = Path(directory) / str(len(files)) / original.name
+                path.parent.mkdir()
+                shutil.copyfile(original, path)
+                with path.open("rb") as stream:
+                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                files.append(path)
+                calls.append({"id": relative, "name": "matrix.send_file", "arguments": {"room": room, "sha256": digest}})
+            operation = self.matrix.message_begin_tools(identity, calls, reply=answer,
+                                                        output_bytes=(p.read_bytes() for p in files))
+            def check_room():
+                self.matrix.message_pending_tools(identity, operation)
+                require_unencrypted_room(client, room)
+            results = []
+            for call, path in zip(calls, files):
+                check_room()
+                sent = client.send_file(room, path, event_id, f"{event_id}:file:{call['id']}",
+                                        [source] if source else [], bool(source), before_send=check_room)
+                if not isinstance(sent, str) or not sent.startswith("$") or len(sent) == 1:
+                    raise RecoveryConflict("Matrix media delivery requires verification")
+                results.append({"id": call["id"], "content": {**call["arguments"], "event_id": sent}})
+            return self.matrix.message_finish_tools(identity, operation, results, deliver_result=True)
 
     def message_turn(self, record):
         matrix = self.matrix
@@ -250,15 +262,20 @@ class ManagedMatrix:
             current = {**event, "message_execution": identity, "thread_id": ref,
                        "checkpoint_digest": claim["checkpoint_digest"], "config_generation": view["config_generation"]}
             if ref is None:
-                history = self.history(event["room_id"], event["event_id"])
+                history = raw_room_history(self.bridge.matrix, matrix, self.bridge.user_id, event["room_id"],
+                                           event["event_id"], self.event)
                 if history:
                     current["body"] += "\nEarlier Matrix messages:\n" + json.dumps(history, ensure_ascii=False)
             if claim["execution"].get("checkpoint"):
                 current["body"] += "\n" + claim["resume_text"]
             matrix.message_current(identity)
+            if "outbox_before" not in record:
+                record["outbox_before"] = snapshot_outbox(self.bridge.workspace)
+                self.bridge.journal.save()
             answer = self.bridge.run_turn(current, record)
             self.bridge.persist_codex()
-            claim = matrix.message_save_reply(identity, answer)
+            outputs = changed_outbox_files(self.bridge.workspace, record["outbox_before"])
+            claim = self.save_outputs(identity, event, answer, outputs)
         if claim["recovery"] != "deliver":
             return
         cp = claim["execution"]["checkpoint"]
@@ -268,8 +285,18 @@ class ManagedMatrix:
         room = event["room_id"]
         text = claim["saved_result"]
         content = {"m.relates_to": {"m.in_reply_to": {"event_id": event["event_id"]}}}
+        source = source_agent_reply_user_id(event, self.bridge.agent_ids, self.bridge.user_id)
+        mentions = reply_mention_user_ids(event, text, self.bridge.agent_ids, self.bridge.user_id)
+        if source:
+            content["com.agentteams.auto_source_mention"] = True
+        if event.get("coordination_session"):
+            content["org.agentteams.progress_only"] = True
+        elif mentions:
+            content["m.mentions"] = {"user_ids": mentions}
         message_id = publish_raw_saved(self.bridge.matrix, room, text, cp, self.bridge.user_id, bind,
                                        content=content, legacy_transaction_id=matrix_transaction_id)
         matrix.message_delivered(identity, message_id)
+        if record.get("direct"):
+            self.bridge.execution_status(event, "stopped" if record.get("stopped") else "completed", message_id)
         record["status"] = "completed"
         self.bridge.journal.save()

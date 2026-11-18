@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 root = Path(os.environ["AT_SOURCE"])
 sys.path[:0] = [str(Path(__file__).resolve().parents[1] / "src"),
@@ -18,6 +18,44 @@ from worker_matrix_state import matrix_event_key
 
 
 class ManagedTests(unittest.TestCase):
+    def test_media_stages_stable_bytes_and_requires_a_confirmed_matrix_event(self):
+        event = {"room_id": "!room:test", "sender": "@manager:test", "event_id": "$source"}
+        for response in ("$media", ""):
+            with self.subTest(response=response), tempfile.TemporaryDirectory() as directory:
+                managed = ManagedMatrix.__new__(ManagedMatrix)
+                bridge = managed.bridge = Mock(user_id="@worker:test", agent_ids={"@manager:test"},
+                                               workspace=Path(directory))
+                managed.matrix = Mock()
+                bridge.matrix.request.return_value = {"user_id": bridge.user_id, "device_id": "one"}
+                outbox = bridge.workspace / "outbox"
+                outbox.mkdir()
+                file = outbox / "report.txt"
+                file.write_bytes(b"original")
+                def stage(identity, calls, *, reply, output_bytes):
+                    self.assertEqual(list(output_bytes), [b"original"])
+                    self.assertEqual(reply, "Done")
+                    file.write_bytes(b"later unrelated write")
+                    return "operation"
+                def send(room, path, parent, txn, mentions, automatic, *, before_send):
+                    before_send()
+                    self.assertEqual((room, parent, path.name, path.read_bytes()),
+                                     (event["room_id"], "$source", file.name, b"original"))
+                    return response
+                managed.matrix.message_begin_tools.side_effect = stage
+                bridge.matrix.send_file.side_effect = send
+                with patch("agentteams_codex.managed_matrix.require_unencrypted_room") as encryption:
+                    if response:
+                        managed.save_outputs({"event_key": "key"}, event, "Done", [file.name])
+                        args, kwargs = managed.matrix.message_finish_tools.call_args
+                        self.assertEqual(args[2][0]["content"]["event_id"], response)
+                        self.assertEqual(kwargs, {"deliver_result": True})
+                    else:
+                        with self.assertRaises(RecoveryConflict):
+                            managed.save_outputs({"event_key": "key"}, event, "Done", [file.name])
+                        managed.matrix.message_finish_tools.assert_not_called()
+                    self.assertEqual(encryption.call_count, 3)
+                    self.assertEqual(managed.matrix.message_pending_tools.call_count, 2)
+
     def test_receipts_follow_the_authenticated_worker_transport(self):
         with tempfile.TemporaryDirectory() as directory:
             managed = ManagedMatrix.__new__(ManagedMatrix)

@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: agentscope-ai/AgentTeams
-          ref: d1c897d688074f10074f4bb297e6517918488569
+          ref: c1039c2910fb421e74c18306ae9da0d998847d6b
           path: at
           submodules: recursive
       - uses: actions/setup-python@v5
@@ -35,5 +35,9 @@ jobs:
             codex-harness-test -m unittest discover -s /tests -v
           docker run --rm --entrypoint /opt/venv/bin/python3 -v "${{ github.workspace }}/harness/tests:/tests:ro" \
             codex-harness-test /tests/native_input_smoke.py
+          for decision in allow deny; do
+            docker run --rm --network none --entrypoint /opt/venv/bin/python3 -v "${{ github.workspace }}/harness/tests:/tests:ro" \
+              codex-harness-test /tests/native_tool_smoke.py "$decision"
+          done
       - name: Verify native stop and supplement against App Server
         run: make -C harness direct-control-smoke IMAGE=codex-harness-test VERSION=latest
