@@ -72,7 +72,7 @@ Control messages from other Agents are rejected. Pending approval IDs expire whe
 
 ## Model configuration
 
-By default, the adapter uses the Controller-projected gateway URL and gateway key. `CODEX_BASE_URL` and `CODEX_GATEWAY_KEY` are explicit deployment overrides. Keep real keys in deployment secrets, not this repository.
+A managed Worker uses its Worker-scoped model, gateway URL and credential binding from `runtime/runtime.yaml`. Standalone developer runs support `CODEX_BASE_URL` and `CODEX_GATEWAY_KEY` overrides. Keep real keys in deployment secrets, not this repository.
 
 In gateway mode, the generated Codex configuration disables native web search (`web_search = "disabled"`) so Responses gateways that do not implement that tool can accept turns. ChatGPT-account mode keeps Codex's default web-search behavior.
 

@@ -4,6 +4,8 @@ import sys
 import tempfile
 import tomllib
 import unittest
+
+import yaml
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -86,6 +88,37 @@ class ConfigTests(unittest.TestCase):
             config["mcp_servers"]["teamharness"]["env"]["AGENTTEAMS_AGENT_ROLE"],
             "worker",
         )
+
+    def test_managed_worker_uses_worker_gateway_credentials_and_matrix_transport(self):
+        runtime_dir = self.root / "runtime"
+        runtime_dir.mkdir()
+        path = runtime_dir / "runtime.yaml"
+        record = {**self.config, "kind": "MemberRuntimeConfig", "apiVersion": "agentteams.io/v1beta1",
+                  "storage": {"memberPrefix": "agents/alice"}, "member": {**self.config["member"],
+                  "runtimeName": "alice", "matrixUserId": "@alice:test"},
+                  "matrix": {"transport": {"homeserver": "https://matrix"}},
+                  "credentials": {"matrixTokenEnv": "MY_MATRIX", "gatewayKeyEnv": "MY_GATEWAY"}}
+        path.write_text(yaml.safe_dump(record))
+        env = {"AGENTTEAMS_WORKER_NAME": "alice", "AGENTTEAMS_CONTROLLER_URL": "http://controller",
+               "AGENTTEAMS_PROCESS_ID": "boot", "MY_MATRIX": "matrix-example", "MY_GATEWAY": "worker-example",
+               "CODEX_BASE_URL": "https://obsolete", "CODEX_GATEWAY_KEY": "obsolete", "CODEX_AUTH_MODE": "chatgpt"}
+        with patch.dict(os.environ, env, clear=True):
+            config = read_runtime(path)
+            config["desired"]["inlineConfig"]["soul"] = "previous soul"
+            (self.root / "SOUL.md").write_text("durable personality")
+            model, prompt = prepare(config, self.root / ".codex", self.root / "workspace", self.plugin)
+            self.assertIn("durable personality", prompt)
+            self.assertNotIn("previous soul", prompt)
+            self.assertEqual(model, "test-model")
+            self.assertEqual(config["matrix"]["accessToken"], "matrix-example")
+            self.assertEqual(config["desired"]["model"]["gatewayKey"], "worker-example")
+            raw = (self.root / ".codex/config.toml").read_text()
+            self.assertEqual(tomllib.loads(raw)["model_providers"]["agentteams"]["base_url"], "https://gateway/model-route/v1")
+            self.assertNotIn("worker-example", raw)
+            record["storage"]["memberPrefix"] = "agents/bob"
+            path.write_text(yaml.safe_dump(record))
+            with self.assertRaisesRegex(ValueError, "storage scope"):
+                read_runtime(path)
 
     def test_role_change_replaces_discovered_skills(self):
         self.config["member"]["role"] = "team_leader"

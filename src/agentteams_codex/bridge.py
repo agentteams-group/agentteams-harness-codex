@@ -19,7 +19,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .client import Client, CodexError, completed_answer
-from .config import prepare, read_runtime, sync_assigned_skills
+from .config import managed_worker, prepare, read_runtime, sync_assigned_skills
 try:
     from runtime_observability import event as trace_event
 except ImportError:
@@ -221,10 +221,6 @@ class Bridge:
         )
         self.journal = Journal(self.runtime_path.parent / "codex-bridge-state.json")
         restore_codex(self.runtime_path.parent / "codex-state.tar.gz", self.home)
-        self.matrix = MatrixClient(
-            os.environ["AGENTTEAMS_MATRIX_URL"],
-            os.environ["AGENTTEAMS_WORKER_MATRIX_TOKEN"],
-        )
         self.stop = threading.Event()
         self.controls = queue.Queue()
         self.active = None
@@ -311,7 +307,13 @@ class Bridge:
             self.agent_ids = manager_allowed_senders(self.runtime_path, domain) - {f"@{os.getenv('AGENTTEAMS_ADMIN_USER', 'admin')}:{domain}"}
         if not self.rooms:
             raise ValueError("runtime.yaml has no Matrix rooms")
-        sync_assigned_skills(self.config, self.home, self.plugin)
+        if managed_worker():
+            channel = self.config["matrix"]
+            self.matrix = MatrixClient(channel["transport"]["homeserver"], channel["accessToken"])
+            prepare(self.config, self.home, self.workspace, self.plugin)
+        else:
+            self.matrix = MatrixClient(os.environ["AGENTTEAMS_MATRIX_URL"], os.environ["AGENTTEAMS_WORKER_MATRIX_TOKEN"])
+            sync_assigned_skills(self.config, self.home, self.plugin)
 
     def persist_codex(self, *, include_workspace=True):
         prefix = os.getenv("AGENTTEAMS_STORAGE_PREFIX")
@@ -541,7 +543,8 @@ class Bridge:
         ).get("model", {}).get("gatewayKey", "")
         environment = {
             **os.environ,
-            "CODEX_GATEWAY_KEY": os.getenv("CODEX_GATEWAY_KEY") or credential,
+            "CODEX_GATEWAY_KEY": (config["desired"]["model"]["gatewayKey"] if managed_worker()
+                                  else os.getenv("CODEX_GATEWAY_KEY") or credential),
         }
         thread_id = self.journal.data["rooms"].get(event.get("coordination_session", event["room_id"]))
         if event.get("recovery"):

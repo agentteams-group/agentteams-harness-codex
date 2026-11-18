@@ -28,20 +28,18 @@ export AGENTTEAMS_PLUGIN_DIR=/opt/agentteams/plugins/teamharness
 export AGENTTEAMS_MATRIX_USER_ID="@${AGENTTEAMS_WORKER_NAME}:${AGENTTEAMS_MATRIX_DOMAIN}"
 
 for attempt in $(seq 1 12); do
-    if mc mirror "${AGENTTEAMS_STORAGE_PREFIX%/}/agents/${AGENTTEAMS_WORKER_NAME}/runtime/" "${WORKER_HOME}/runtime/" --overwrite >/dev/null 2>&1; then
+    if /opt/venv/bin/python -m agentteams_codex.bootstrap; then
         break
+    fi
+    if [ "${attempt}" -eq 12 ]; then
+        echo 'ERROR: unable to restore the Worker startup configuration' >&2
+        exit 1
     fi
     sleep 5
 done
-test -s "${TEAMHARNESS_RUNTIME_CONFIG}"
-if jq -e '.workspace_has_files == true' "${WORKER_HOME}/runtime/codex-bridge-state.json" >/dev/null 2>&1; then
-    mc mirror "${AGENTTEAMS_STORAGE_PREFIX%/}/agents/${AGENTTEAMS_WORKER_NAME}/workspace/" "${TEAMHARNESS_WORKSPACE}/" --overwrite >/dev/null
-else
-    mc mirror "${AGENTTEAMS_STORAGE_PREFIX%/}/agents/${AGENTTEAMS_WORKER_NAME}/workspace/" "${TEAMHARNESS_WORKSPACE}/" --overwrite >/dev/null 2>&1 || true
-fi
 # An explicit developer-account mount is separate from object-storage state.
 # Your auth.json is never included in a session snapshot.
-if [ "${CODEX_AUTH_MODE:-gateway}" = chatgpt ]; then
+if [ "${CODEX_AUTH_MODE:-gateway}" = chatgpt ] && { [ -z "${AGENTTEAMS_CONTROLLER_URL:-}" ] || [ "${AGENTTEAMS_AGENT_ROLE:-worker}" = manager ]; }; then
     cp "${CODEX_AUTH_FILE:?CODEX_AUTH_FILE is required in chatgpt mode}" "${CODEX_HOME}/auth.json"
     chmod 600 "${CODEX_HOME}/auth.json"
 fi
