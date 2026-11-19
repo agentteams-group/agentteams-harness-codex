@@ -7,6 +7,8 @@ import sys
 import subprocess
 
 import yaml
+from task_recovery import enabled as managed_worker
+from worker_runtime_config import project
 from agentteams_skill_warnings import check_skill, report_warnings
 
 
@@ -17,6 +19,22 @@ def read_runtime(path: Path) -> dict:
         or config.get("member", {}).get("runtime") != "codex"
     ):
         raise ValueError("runtime.yaml must describe a codex member")
+    if managed_worker():
+        if config["member"].get("role") == "manager":
+            raise ValueError("Worker received a Manager runtime configuration")
+        legacy = None
+        compatibility = path.parent.parent / "openclaw.json"
+        if config.get("desired", {}).get("model") is None and compatibility.is_file():
+            legacy = json.loads(compatibility.read_text())
+        projected = project(config, "codex", os.environ["AGENTTEAMS_WORKER_NAME"], legacy)
+        matrix = projected["channels"]["matrix"]
+        config["matrix"] = {**config.get("matrix", {}), "accessToken": matrix["accessToken"]}
+        model_ref = projected["agents"]["defaults"]["model"]["primary"]
+        provider_id, model = model_ref.split("/", 1)
+        provider = projected["models"]["providers"][provider_id]
+        config.setdefault("desired", {})["model"] = {**(config.get("desired", {}).get("model") or {}),
+                                                    "model": model, "gatewayKey": provider["apiKey"],
+                                                    "gatewayUrl": provider["baseUrl"]}
     return config
 
 
@@ -128,7 +146,13 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
     if role == "manager":
         for path in manifest.get("prompts", {}).get("manager", {}).values():
             context.append((plugin / path).read_text())
-    for field, value in desired.get("inlineConfig", {}).items():
+    inline = dict(desired.get("inlineConfig", {}))
+    if managed_worker():
+        for field, filename in (("identity", "IDENTITY.md"), ("soul", "SOUL.md"), ("agents", "AGENTS.md")):
+            asset = home.parent / filename
+            if asset.is_file():
+                inline[field] = asset.read_text()
+    for field, value in inline.items():
         if value:
             context.append(f"{field}:\n{value}")
     model_config = desired.get("model", {})
@@ -138,14 +162,14 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
         'approval_policy = "never"',
         'sandbox_mode = "workspace-write"',
     ]
-    gateway = (
+    gateway = model_config["gatewayUrl"] if managed_worker() else (
         os.getenv("CODEX_BASE_URL")
         or model_config.get("gatewayUrl")
         or os.getenv("AGENTTEAMS_AI_GATEWAY_URL")
     )
     # Explicit local-account mode is useful on trusted developer machines.
     # Production uses the Controller-issued gateway credential by default.
-    if os.getenv("CODEX_AUTH_MODE", "gateway") != "chatgpt":
+    if managed_worker() or os.getenv("CODEX_AUTH_MODE", "gateway") != "chatgpt":
         if not gateway:
             raise ValueError("Codex requires a Responses API gateway URL")
         gateway = gateway.rstrip("/")
@@ -174,7 +198,7 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
             sorted(
                 name
                 for name in os.environ
-                if name.startswith(("AGENTTEAMS_", "TEAMHARNESS_", "MC_"))
+                if name == "PYTHONPATH" or name.startswith(("AGENTTEAMS_", "TEAMHARNESS_", "MC_"))
             )
         ),
     ]

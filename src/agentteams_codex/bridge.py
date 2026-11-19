@@ -18,7 +18,10 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .client import Client, CodexError, completed_answer
-from .config import prepare, read_runtime, sync_assigned_skills
+from .native_input import rollout_digest
+from .managed_matrix import ManagedMatrix
+from .tool_hook import confirm_native_tool, require_hooks
+from .config import managed_worker, prepare, read_runtime, sync_assigned_skills
 try:
     from runtime_observability import event as trace_event
 except ImportError:
@@ -27,7 +30,12 @@ except ImportError:
 
 # The transport and file helpers are consumed unchanged from a pinned AT
 # commit. Runtime execution and Codex state belong to this repository.
-from matrix_channel import MatrixClient, matrix_events
+from agentteams_receipts import Receipts, completed_turns
+from matrix_channel import MatrixClient, matrix_events, matrix_transaction_id
+from task_recovery import RecoveryConflict, RecoveryUnavailable
+from worker_matrix_delivery import confirm_bound
+from worker_matrix_raw import publish_raw_saved
+from worker_sessions import WorkerSessions
 from matrix_bridge import (
     materialize_attachment,
     snapshot_outbox,
@@ -117,8 +125,12 @@ class Journal:
                     f"{prefix}/agents/{os.environ['AGENTTEAMS_WORKER_NAME']}/runtime/{self.path.name}",
                 )
 
-    def ingest(self, events, cursor):
+    def ingest(self, events, cursor, completed=()):
         with self.lock:
+            for room, event_id in completed:
+                record = self.data["events"].get(event_id)
+                if record and record["event"]["room_id"] == room:
+                    record["status"] = "completed"
             for event in events:
                 self.data["events"].setdefault(
                     event["event_id"], {"event": event, "status": "queued"}
@@ -167,6 +179,17 @@ def restore_codex(archive, home):
         source.extractall(home)
 
 
+def task_thread(home, recovery, task, work):
+    sessions = WorkerSessions("codex", recovery=recovery)
+    view = sessions.load(work)
+    execution = task["execution"]
+    if (view["generation"] != execution["generation"] or view["instance_id"] != execution["instance_id"]
+            or view["checkpoint_digest"] != recovery.digest(execution.get("checkpoint"))):
+        raise RecoveryConflict("Task changed before Codex thread selection")
+    ref = (view.get("cache") or {}).get("native_ref")
+    return (ref if sessions.usable(view, ref, rollout_digest(home, ref)) else None), view
+
+
 class Bridge:
     def __init__(self):
         self.name = os.environ["AGENTTEAMS_WORKER_NAME"]
@@ -180,10 +203,6 @@ class Bridge:
         )
         self.journal = Journal(self.runtime_path.parent / "codex-bridge-state.json")
         restore_codex(self.runtime_path.parent / "codex-state.tar.gz", self.home)
-        self.matrix = MatrixClient(
-            os.environ["AGENTTEAMS_MATRIX_URL"],
-            os.environ["AGENTTEAMS_WORKER_MATRIX_TOKEN"],
-        )
         self.stop = threading.Event()
         self.controls = queue.Queue()
         self.active = None
@@ -192,26 +211,50 @@ class Bridge:
         self.reported_ready = False
         self.config = read_runtime(self.runtime_path)
         self.refresh_context()
+        self.managed = ManagedMatrix(self, actionable_events) if managed_worker() else None
+        self.manager_receipts = (Receipts(self.home.parent)
+            if self.config.get("member", {}).get("role") == "manager" else None)
+        self.scan_ready = threading.Event()
+        self.handoff_scanned = False
+
+    def deliver_task(self, recovery, task_id, team, room, execution, text):
+        def bind(cp):
+            actual = recovery.checkpoint(task_id, team, cp)["execution"]
+            confirm_bound(actual, execution, "codex", cp)
+        return publish_raw_saved(self.matrix, room, text, execution["checkpoint"], self.user_id, bind,
+            content={"org.agentteams.progress_only": True}, legacy_transaction_id=matrix_transaction_id)
 
     def recover_tasks(self, only_task=None):
         from task_recovery import Recovery, enabled
         if not enabled() or self.config.get("member", {}).get("role") == "manager":
             return
-        recovery = Recovery()
+        from worker_matrix_state import WorkerMatrix
+        recovery = Recovery(device_delivery=True)
+        WorkerMatrix("codex", recovery=recovery).start()
         snapshot = recovery.discover()
         for entry in snapshot["tasks"]:
             task_id, team = entry["task"]["task_id"], entry["team_id"]
             if only_task is not None and task_id != only_task:
                 continue
-            claimed = recovery.claim(snapshot, entry)
+            try:
+                claimed = recovery.claim(snapshot, entry)
+            except RecoveryConflict:
+                continue  # A changed assignment must not block an unrelated Task.
             task = claimed["task"]
             execution = task["execution"]
+            if execution["state"] == "needs_verification":
+                trace_event("task.recovery.verify", team_id=team, task_id=task_id, generation=execution["generation"])
+                continue
             cp = execution.get("checkpoint") or {}
             room = task.get("room_id")
             if not room:
                 raise ValueError("Recoverable Task has no Matrix room")
             if cp.get("delivery") == "pending":
-                event_id = self.matrix.send_text(room, claimed["saved_result"], transaction_key=cp["reply_txn"], progress_only=True)
+                try:
+                    event_id = self.deliver_task(recovery, task_id, team, room, execution, claimed["saved_result"])
+                except (RecoveryConflict, RecoveryUnavailable) as error:
+                    trace_event("task.delivery_pending", task_id=task_id, error_type=type(error).__name__)
+                    continue
                 recovery.delivered(task_id, team, event_id)
                 task = recovery.current(task_id, team)
                 if task is None:
@@ -221,15 +264,14 @@ class Bridge:
             if task["status"] == "submitted":
                 continue
             key = team + "/" + task_id
-            session = self.journal.data.get("task_sessions", {}).get(key)
-            local_thread = session.get("thread_id") if recovery.session_usable(session, task, "codex") else None
             event_id = "recovery:" + key + ":" + str(execution["generation"])
             task = {**task, "team_id": team, "spec": claimed["spec"]}
             event = {"event_id": event_id, "room_id": room, "sender": self.user_id,
                      "kind": "text", "body": recovery.resume_text(task),
                      "session_source_event_ids": [],
                      "coordination_session": "recovery:" + key,
-                     "recovery": {"task_id": task_id, "team_id": team, "thread_id": local_thread, "spec": claimed["spec"]}}
+                     "recovery": {"task_id": task_id, "team_id": team, "thread_id": None, "spec": claimed["spec"],
+                                  **{k: execution[k] for k in ("instance_id", "generation", "process_id")}}}
             # Supersede only the same Task's local admission. Other Matrix
             # backlog stays queued and its cursor is never reset.
             for old_id, old in list(self.journal.data["events"].items()):
@@ -242,7 +284,7 @@ class Bridge:
                     event["session_source_event_ids"].extend(
                         source_id for source_id in source.get("session_source_event_ids", [old_id])
                         if source_id.startswith("$"))
-                    if old_id != event_id:
+                    if old_id != event_id and not source.get("shared_key"):
                         old["status"] = "superseded"
             event["session_source_event_ids"] = list(dict.fromkeys(event["session_source_event_ids"]))
             self.journal.ingest([event], self.journal.data["cursor"])
@@ -257,7 +299,13 @@ class Bridge:
             self.agent_ids = manager_allowed_senders(self.runtime_path, domain) - {f"@{os.getenv('AGENTTEAMS_ADMIN_USER', 'admin')}:{domain}"}
         if not self.rooms:
             raise ValueError("runtime.yaml has no Matrix rooms")
-        sync_assigned_skills(self.config, self.home, self.plugin)
+        if managed_worker():
+            channel = self.config["matrix"]
+            self.matrix = MatrixClient(channel["transport"]["homeserver"], channel["accessToken"])
+            prepare(self.config, self.home, self.workspace, self.plugin)
+        else:
+            self.matrix = MatrixClient(os.environ["AGENTTEAMS_MATRIX_URL"], os.environ["AGENTTEAMS_WORKER_MATRIX_TOKEN"])
+            sync_assigned_skills(self.config, self.home, self.plugin)
 
     def persist_codex(self, *, include_workspace=True):
         prefix = os.getenv("AGENTTEAMS_STORAGE_PREFIX")
@@ -347,6 +395,8 @@ class Bridge:
                 "control",
             )
         else:
+            if event.get("control_execution"):
+                event["awaiting_native_control"] = True
             self.controls.put(
                 (
                     event,
@@ -374,6 +424,21 @@ class Bridge:
                 "capabilities": ["stop", "steer"], **({"message_id": message_id} if message_id else {})},
         }, f"codex:{event['event_id']}:execution:{status}")
 
+    def join_invites(self, payload, trusted):
+        for room_id, room in payload.get("rooms", {}).get("invite", {}).items():
+            if any(
+                event.get("sender") in trusted
+                and event.get("state_key") == self.user_id
+                and event.get("content", {}).get("membership") == "invite"
+                for event in room.get("invite_state", {}).get("events", [])
+            ):
+                self.matrix.request(
+                    "POST",
+                    "/_matrix/client/v3/join/"
+                    + urllib.parse.quote(room_id, safe=""),
+                    {},
+                )
+
     def poll(self):
         while not self.stop.is_set():
             stage = "config.refresh"
@@ -396,66 +461,70 @@ class Bridge:
                         warnings = self.home / "skill-warnings.json"
                         if warnings.is_file() and json.loads(warnings.read_text()):
                             sync_assigned_skills(self.config, self.home, self.plugin)
-                cursor = self.journal.data["cursor"]
-                stage = "matrix.sync"
-                payload = self.matrix.sync(cursor or None, 1000)
-                stage = "matrix.events"
-                allowed_senders = None
-                if self.config.get("member", {}).get("role") == "manager":
-                    allowed_senders = manager_allowed_senders(self.runtime_path, os.environ["AGENTTEAMS_MATRIX_DOMAIN"])
-                trusted = allowed_senders if allowed_senders is not None else self.agent_ids | {
-                    self.config.get("team", {}).get("admin", {}).get("matrixUserId", "")
-                }
-                for room_id, room in payload.get("rooms", {}).get("invite", {}).items():
-                    if any(
-                        event.get("sender") in trusted
-                        and event.get("state_key") == self.user_id
-                        and event.get("content", {}).get("membership") == "invite"
-                        for event in room.get("invite_state", {}).get("events", [])
-                    ):
-                        self.matrix.request(
-                            "POST",
-                            "/_matrix/client/v3/join/"
-                            + urllib.parse.quote(room_id, safe=""),
-                            {},
-                        )
-                # Matrix membership is the access boundary. Task rooms created
-                # by TeamHarness may not appear in the initial runtime.yaml.
-                for room_id in payload.get("rooms", {}).get("join", {}):
-                    self.rooms.setdefault(room_id, "team")
-                if cursor:
-                    self.matrix.fill_timeline_gaps(payload, cursor, self.rooms)
-                events = (
-                    actionable_events(payload, self.rooms, self.user_id, self.agent_ids, allowed_senders)
-                    if cursor
-                    else []
-                )
-                queued = []
-                for event in events:
-                    if event["event_id"] in self.journal.data["events"]:
-                        continue
-                    policy = self.config.get("desired", {}).get("channelPolicy", {})
-                    deny = (
-                        "groupDenyExtra"
-                        if self.rooms[event["room_id"]] == "team"
-                        else "dmDenyExtra"
-                    )
-                    domain = os.environ["AGENTTEAMS_MATRIX_DOMAIN"]
-                    denied = {
-                        (
-                            value
-                            if value == "*" or (value.startswith("@") and ":" in value)
-                            else f"@{value.lstrip('@')}:{domain}"
-                        )
-                        for value in policy.get(deny, [])
+                if getattr(self, "managed", None):
+                    stage = "matrix.shared_sync"
+                    queued, failures = self.managed.poll()
+                    for room, error in failures.items():
+                        trace_event("matrix.history_pending", room_id=room, error_type=type(error).__name__)
+                    # The local journal schedules native callbacks. Its cursor is never used to consume a managed batch.
+                    self.managed.schedule(queued)
+                    self.scan_ready.set()
+                    if self.managed.scan_confirmed and not self.handoff_scanned:
+                        from worker_handoff import recovery_scanned
+                        recovery_scanned()
+                        self.handoff_scanned = True
+                else:
+                    cursor = self.journal.data["cursor"]
+                    stage = "matrix.sync"
+                    payload = self.matrix.sync(cursor or None, 1000)
+                    stage = "matrix.events"
+                    allowed_senders = None
+                    if self.config.get("member", {}).get("role") == "manager":
+                        allowed_senders = manager_allowed_senders(self.runtime_path, os.environ["AGENTTEAMS_MATRIX_DOMAIN"])
+                    trusted = allowed_senders if allowed_senders is not None else self.agent_ids | {
+                        self.config.get("team", {}).get("admin", {}).get("matrixUserId", "")
                     }
-                    if "*" in denied or event["sender"] in denied:
-                        continue
-                    if self.handle_control(event):
-                        queued.append({**event, "control": True})
-                    else:
-                        queued.append(event)
-                self.journal.ingest(queued, payload.get("next_batch", cursor))
+                    self.join_invites(payload, trusted)
+                    # Matrix membership is the access boundary. Task rooms created
+                    # by TeamHarness may not appear in the initial runtime.yaml.
+                    for room_id in payload.get("rooms", {}).get("join", {}):
+                        self.rooms.setdefault(room_id, "team")
+                    if cursor:
+                        self.matrix.fill_timeline_gaps(payload, cursor, self.rooms)
+                    events = (
+                        actionable_events(payload, self.rooms, self.user_id, self.agent_ids, allowed_senders)
+                        if cursor
+                        else []
+                    )
+                    completed = completed_turns(payload, self.user_id) if self.manager_receipts else ()
+                    queued = []
+                    for event in events:
+                        if ((event["room_id"], event["event_id"]) in completed
+                                or event["event_id"] in self.journal.data["events"]):
+                            continue
+                        policy = self.config.get("desired", {}).get("channelPolicy", {})
+                        deny = (
+                            "groupDenyExtra"
+                            if self.rooms[event["room_id"]] == "team"
+                            else "dmDenyExtra"
+                        )
+                        domain = os.environ["AGENTTEAMS_MATRIX_DOMAIN"]
+                        denied = {
+                            (
+                                value
+                                if value == "*" or (value.startswith("@") and ":" in value)
+                                else f"@{value.lstrip('@')}:{domain}"
+                            )
+                            for value in policy.get(deny, [])
+                        }
+                        if "*" in denied or event["sender"] in denied:
+                            continue
+                        if self.handle_control(event):
+                            queued.append({**event, "control": True})
+                        else:
+                            queued.append(event)
+                    self.journal.ingest(queued, payload.get("next_batch", cursor), completed)
+                    self.scan_ready.set()
                 for received in queued:
                     trace_event("message.received", room_id=received["room_id"], event_id=received["event_id"], sender=received["sender"])
                 if not self.last_sync:
@@ -487,11 +556,15 @@ class Bridge:
         ).get("model", {}).get("gatewayKey", "")
         environment = {
             **os.environ,
-            "CODEX_GATEWAY_KEY": os.getenv("CODEX_GATEWAY_KEY") or credential,
+            "CODEX_GATEWAY_KEY": (config["desired"]["model"]["gatewayKey"] if managed_worker()
+                                  else os.getenv("CODEX_GATEWAY_KEY") or credential),
         }
         thread_id = self.journal.data["rooms"].get(event.get("coordination_session", event["room_id"]))
         if event.get("recovery"):
             thread_id = event["recovery"].get("thread_id")
+        if event.get("message_execution"):
+            environment["AGENTTEAMS_CODEX_MESSAGE_EXECUTION"] = json.dumps(event["message_execution"])
+            thread_id = event["thread_id"]
         text, image = event["body"], None
         if event["kind"] != "text":
             text, attachment = materialize_attachment(
@@ -510,15 +583,12 @@ class Bridge:
                 image = attachment
         trace_event("inference.begin", model=model, room_id=event["room_id"], event_id=event["event_id"], layer="agent_turn")
         with Client(self.workspace, env=environment) as client:
-            if event.get("recovery") and record.get("status") == "running" and record.get("thread_id"):
-                previous = client.request("thread/read", {"threadId": record["thread_id"], "includeTurns": True})["thread"]
-                recovered = completed_answer(previous, event["event_id"])
-                if recovered is not None:
-                    return recovered
+            if event.get("message_execution"):
+                require_hooks(client, self.workspace)
             try:
                 thread = client.open_thread(thread_id, self.workspace, model, instructions)
             except CodexError:
-                if not event.get("recovery") or not thread_id:
+                if not (event.get("recovery") or event.get("message_execution")) or not thread_id:
                     raise
                 # A matching marker is insufficient when the native archive
                 # was lost or the SDK has expired the session.
@@ -527,10 +597,14 @@ class Bridge:
             self.journal.data["rooms"][event.get("coordination_session", event["room_id"])] = thread_id
             record["thread_id"] = thread_id
             self.journal.save()
-            recovered = completed_answer(thread, event["event_id"])
+            if getattr(self, "managed", None) and (event.get("shared_key") or event.get("recovery")):
+                self.managed.commit_for_turn(client, thread_id, event)
+                if event.get("message_execution"):
+                    self.managed.remember_message(event, thread_id)
+            recovered = completed_answer(thread, event["event_id"], terminal_only=bool(event.get("message_execution") or event.get("recovery")))
             if recovered is not None:
                 return recovered
-            if record.get("status") == "running" and not event.get("recovery"):
+            if record.get("status") == "running" and not (event.get("recovery") or event.get("message_execution")):
                 # The original start may have reached the model before a crash.
                 # Do not repeat shell/MCP side effects when history is uncertain.
                 return "Codex execution was interrupted before its result was saved; it was not replayed. Send a new message to continue."
@@ -574,6 +648,8 @@ class Bridge:
                                 raise ValueError(
                                     "The requested Codex turn has already ended"
                                 )
+                            if source.get("control_execution"):
+                                self.managed.commit_for_turn(client, thread_id, source)
                             if verb in {"/cancel", "/redirect"}:
                                 client.control("turn/interrupt", thread_id, turn["id"])
                                 if direct and source.get("execution_control"):
@@ -647,6 +723,8 @@ class Bridge:
                                             "context_id": f"{thread_id}:{turn['id']}",
                                             "status": "approved" if result["decision"] == "accept" else "rejected",
                                         })
+                            if source.get("control_execution"):
+                                self.managed.confirm_control(source, "native control accepted", retire=verb != "/redirect")
                             self.reply(source, "Codex control accepted.", "control")
                         except (ValueError, CodexError) as error:
                             if verb == "/redirect":
@@ -665,6 +743,8 @@ class Bridge:
                     method, params = message.get("method", ""), message.get(
                         "params", {}
                     )
+                    if event.get("message_execution") and method == "item/completed":
+                        confirm_native_tool(self.managed.matrix, event["message_execution"], params.get("item") or {})
                     if "id" in message and method:
                         if method == "item/permissions/requestApproval":
                             client.send(
@@ -799,6 +879,46 @@ class Bridge:
                         })
                 self.pending_requests.clear()
 
+    def attach_late_assignment(self, event):
+        """Attach an assignment delivered after self-discovery without making a second turn."""
+        matrix = self.managed.matrix
+        key = event["shared_key"]
+        native = matrix.native_input(key)
+        item = native["input"]
+        work = item.get("work") or {}
+        room = item["room_id"]
+        if (item.get("intent") != "task_notification" or work.get("kind") != "task"
+                or room != event["room_id"] or event["event_id"] != item["event_id"]):
+            raise RecoveryConflict("Late Matrix input no longer identifies the same Task")
+        raw = {**item["input"], "room_id": room, "event_id": item["event_id"]}
+        if self.managed.classify(room, raw) != ("task_notification", work["task_id"]):
+            return False
+        recovery = matrix.recovery
+        task = recovery.current(work["task_id"], work["team_id"])
+        if not task or task.get("room_id") != room:
+            return False
+        execution = task.get("execution", {})
+        if execution.get("process_id") != recovery.process or execution.get("state") != "active":
+            return False
+        admission = f"recovery:{work['team_id']}/{work['task_id']}:{execution['generation']}"
+        turn = self.journal.data["events"].get(admission)
+        if not turn or turn["status"] != "completed":
+            return False
+        thread, view = task_thread(self.home, recovery, task, work)
+        if not thread:
+            return False
+        config = read_runtime(self.runtime_path)
+        model, instructions = prepare(config, self.home, self.workspace, self.plugin)
+        with Client(self.workspace, env={**os.environ, "CODEX_GATEWAY_KEY": config["desired"]["model"]["gatewayKey"]}) as client:
+            actual = client.open_thread(thread, self.workspace, model, instructions)
+            if actual["id"] != thread:
+                raise RecoveryConflict("Late assignment resolved to a different Codex thread")
+            self.managed.commit_for_turn(client, thread, {"room_id": room, "recovery": work})
+        digest = rollout_digest(self.home, thread)
+        if digest:
+            WorkerSessions("codex", recovery=recovery).remember(work, view, execution, thread, digest, int(time.time()) + 86400)
+        return True
+
     def process(self, event_id, record):
         event = record["event"]
         if event.get("recovery"):
@@ -807,6 +927,9 @@ class Bridge:
             from task_recovery import enabled
             if enabled():
                 self.recover_tasks(event["coordination_session"].split(":", 2)[1])
+                if event.get("shared_key") and self.managed:
+                    if not self.attach_late_assignment(event):
+                        return
                 record["status"] = "superseded"
                 self.journal.save()
                 return
@@ -814,6 +937,8 @@ class Bridge:
             record["status"] = "completed"
             self.journal.save()
             return
+        if event.get("shared_key") and getattr(self, "managed", None):
+            return self.managed.message_turn(record)
         if "answer" not in record:
             record.setdefault("outbox_before", snapshot_outbox(self.workspace))
             self.journal.save()
@@ -855,6 +980,8 @@ class Bridge:
             bool(source),
             **({"progress_only": True} if event.get("coordination_session") else {}),
         )
+        if getattr(self, "manager_receipts", None) and message_id and not record.get("error") and not record.get("stopped"):
+            self.manager_receipts.enqueue(event["room_id"], event_id, "completed")
         record["status"] = "completed"
         trace_event("message.sent", room_id=event["room_id"], event_id=event_id, reply_event_id=message_id)
         # Retain bounded replay protection; pending events are never pruned.
@@ -869,7 +996,7 @@ class Bridge:
 
     def process_recovered_task(self, event_id, record):
         from task_recovery import Recovery, RecoveryConflict
-        recovery = Recovery()
+        recovery = Recovery(device_delivery=True)
         event = record["event"]
         identity = event["recovery"]
         task_id, team = identity["task_id"], identity["team_id"]
@@ -879,23 +1006,35 @@ class Bridge:
             self.journal.save()
             return
         execution = task["execution"]
-        if execution["process_id"] != recovery.process:
-            raise RecoveryConflict("Task execution was replaced")
+        if (execution["runtime"] != "codex" or execution["process_id"] != recovery.process
+                or any(identity.get(k) != execution[k] for k in ("instance_id", "generation", "process_id"))):
+            record["status"] = "superseded"
+            self.journal.save()
+            return
+        if execution["state"] == "needs_verification":
+            record["status"] = "superseded"
+            self.journal.save()
+            return
         cp = execution.get("checkpoint") or {}
         if cp.get("delivery") == "delivered" and (task["status"] == "submitted" or record.get("reply_txn") == cp.get("reply_txn")):
             record["status"] = "completed"
             self.journal.save()
             return
+        work = {"kind": "task", "task_id": task_id, "team_id": team}
+        selection = None
         if cp.get("delivery") != "pending":
-            event["body"] = recovery.resume_text({**task, "team_id": team, "spec": identity["spec"]})
-            # A retry must use the latest checkpoint; it must not replay the
-            # interrupted turn against an older native session.
+            if execution["state"] != "active":
+                raise RecoveryConflict("Codex Task execution is not active")
             if record.get("status") == "running":
-                identity["thread_id"] = None
+                recovery.interrupted(task_id, team)
+                return
+            identity["thread_id"], selection = task_thread(self.home, recovery, task, work)
+            event["body"] = recovery.resume_text({**task, "team_id": team, "spec": identity["spec"]})
             try:
                 answer = self.run_turn(event, record)
             except BaseException:
-                recovery.interrupted(task_id, team)
+                if record.get("status") == "running":
+                    recovery.interrupted(task_id, team)
                 raise
             self.persist_codex()
             saved, answer = recovery.prepare_reply(task_id, team, answer)
@@ -908,28 +1047,49 @@ class Bridge:
             # The Controller revalidates the saved bytes on a repeated claim.
             snapshot = recovery.discover()
             entry = next(e for e in snapshot["tasks"] if e["task"]["task_id"] == task_id and e["team_id"] == team)
-            answer = recovery.claim(snapshot, entry)["saved_result"]
+            saved = recovery.claim(snapshot, entry)
+            cp = saved["execution"]["checkpoint"]
+            answer = saved["saved_result"]
         record["reply_txn"] = cp["reply_txn"]
         self.journal.save()
-        message_id = self.matrix.send_text(event["room_id"], answer, transaction_key=cp["reply_txn"], progress_only=True)
+        message_id = self.deliver_task(recovery, task_id, team, event["room_id"], saved["execution"], answer)
         saved = recovery.delivered(task_id, team, message_id)
-        if record.get("thread_id"):
-            self.journal.data.setdefault("task_sessions", {})[team+"/"+task_id] = {
-                "thread_id": record["thread_id"], "runtime": "codex", "expires_at": time.time()+86400,
-                "checkpoint_digest": recovery.digest(saved["execution"]["checkpoint"])}
         record["status"] = "completed"
         self.journal.save()
+        if selection and saved.get("task", {}).get("status") != "submitted":
+            native_ref = record.get("thread_id")
+            digest = rollout_digest(self.home, native_ref)
+            if digest:
+                try:
+                    sessions = WorkerSessions("codex", recovery=recovery)
+                    view = sessions.load(work)
+                    if (view["config_generation"] == selection["config_generation"]
+                            and view["checkpoint_digest"] == recovery.digest(saved["execution"]["checkpoint"])):
+                        sessions.remember(work, view, identity, native_ref, digest, int(time.time()) + 86400)
+                except (RecoveryConflict, RecoveryUnavailable) as exc:
+                    trace_event("task.recovery.cache_skipped", task_id=task_id, error_type=type(exc).__name__)
 
     def run(self):
         # Discover/claim before polling or accepting new Matrix work. A failed
         # recovery leaves the process blocked and visible to its supervisor.
         self.recover_tasks()
         threading.Thread(target=self.poll, daemon=True).start()
+        if self.managed or self.manager_receipts:
+            while not self.stop.is_set() and not self.scan_ready.wait(0.5):
+                continue
+        next_discovery = time.monotonic() + 5
         while not self.stop.is_set():
+            if self.managed and time.monotonic() >= next_discovery:
+                try:
+                    self.recover_tasks()
+                except (RecoveryConflict, RecoveryUnavailable) as error:
+                    trace_event("task.scan_pending", error_type=type(error).__name__)
+                next_discovery = time.monotonic() + 5
             pending = [
                 (key, value)
                 for key, value in list(self.journal.data["events"].items())
                 if value["status"] not in {"completed", "superseded"}
+                and (not self.managed or value["event"].get("recovery") or key in self.managed.available)
             ]
             for event_id, record in pending:
                 if self.stop.is_set():
@@ -944,7 +1104,8 @@ class Bridge:
                         flush=True,
                     )
                     self.stop.wait(2)
-                    break
+                    if not self.managed:
+                        break
             self.stop.wait(0.2)
 
 
@@ -952,6 +1113,10 @@ def main():
     if os.getenv("AGENTTEAMS_MATRIX_E2EE", "0").lower() in {"1", "true"}:
         raise RuntimeError("Codex bridge does not support Matrix E2EE")
     bridge = Bridge()
+    if not bridge.managed:
+        from agentteams_receipts import serve
+        receipts = bridge.manager_receipts or Receipts(bridge.home.parent)
+        threading.Thread(target=serve, args=(receipts, "codex"), daemon=True).start()
 
     class Health(BaseHTTPRequestHandler):
         def do_GET(self):
