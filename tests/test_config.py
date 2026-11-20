@@ -84,6 +84,7 @@ class ConfigTests(unittest.TestCase):
             [path.name for path in (self.root / ".agents/skills").iterdir()], ["basic"]
         )
         self.assertTrue(config["mcp_servers"]["teamharness"]["required"])
+        self.assertEqual(config["mcp_servers"]["teamharness"]["default_tools_approval_mode"], "approve")
         self.assertEqual(
             config["mcp_servers"]["teamharness"]["env"]["AGENTTEAMS_AGENT_ROLE"],
             "worker",

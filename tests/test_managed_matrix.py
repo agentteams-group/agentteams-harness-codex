@@ -18,6 +18,17 @@ from worker_matrix_state import matrix_event_key
 
 
 class ManagedTests(unittest.TestCase):
+    def test_manager_invite_uses_projected_direct_sender_allowlist(self):
+        managed = ManagedMatrix.__new__(ManagedMatrix)
+        managed.receipts = Mock()
+        managed.bridge = Mock(user_id="@worker:test", rooms={}, agent_ids={"@leader:test"},
+            config={"matrix": {"transport": {"dm": {"policy": "allowlist", "allowFrom": ["@manager:test"]}}}})
+        managed.bridge.matrix.request.return_value = {"joined_rooms": []}
+        managed.observe({"rooms": {}})
+        trusted = managed.bridge.join_invites.call_args.args[1]
+        self.assertIn("@manager:test", trusted)
+        self.assertNotIn("@stranger:test", trusted)
+
     def test_restored_input_obeys_current_room_sender_policy(self):
         matrix = ManagedMatrix.__new__(ManagedMatrix)
         room, direct = "!team:test", "!personal:test"
