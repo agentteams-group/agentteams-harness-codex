@@ -33,7 +33,9 @@ class ManagedMatrix:
 
     def observe(self, payload):
         bridge = self.bridge
-        bridge.join_invites(payload, bridge.agent_ids | {bridge.config.get("team", {}).get("admin", {}).get("matrixUserId", "")})
+        dm = bridge.config.get("matrix", {}).get("transport", {}).get("dm") or {}
+        direct_senders = set(dm.get("allowFrom") or []) if dm.get("policy") != "disabled" else set()
+        bridge.join_invites(payload, bridge.agent_ids | direct_senders | {bridge.config.get("team", {}).get("admin", {}).get("matrixUserId", "")})
         self.joined = set(bridge.matrix.request("GET", "/_matrix/client/v3/joined_rooms")["joined_rooms"])
         for room in self.joined:
             bridge.rooms.setdefault(room, "team")

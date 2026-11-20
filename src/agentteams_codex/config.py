@@ -192,6 +192,8 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
         f"args = [{json.dumps(str(plugin / 'mcp/server.py'))}]",
         f"cwd = {json.dumps(str(plugin))}",
         "required = true",
+        # Builtin TeamHarness already enforces Controller role/task authority.
+        'default_tools_approval_mode = "approve"',
         "startup_timeout_sec = 30",
         "env_vars = "
         + json.dumps(
