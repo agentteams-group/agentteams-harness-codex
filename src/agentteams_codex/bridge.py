@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .client import Client, CodexError, completed_answer
 from .native_input import rollout_digest
+from .input_barrier import InputBarrier, ENV as BARRIER_ENV
 from .managed_matrix import ManagedMatrix
 from .tool_hook import confirm_native_tool, require_hooks
 from .config import managed_worker, prepare, read_runtime, sync_assigned_skills, _role
@@ -603,7 +604,7 @@ class Bridge:
             if event["kind"] == "image":
                 image = attachment
         trace_event("inference.begin", model=model, room_id=event["room_id"], event_id=event["event_id"], layer="agent_turn")
-        with Client(working_directory, env=environment) as client:
+        with InputBarrier() as input_barrier, Client(working_directory, env={**environment, BARRIER_ENV: input_barrier.path}) as client:
             if event.get("message_execution") or any(task_context.get(key) for key in ("planning", "review", "completion")):
                 require_hooks(client, working_directory)
             try:
@@ -656,6 +657,7 @@ class Bridge:
             last_progress = {}
             try:
                 while not self.stop.is_set():
+                    input_barrier.serve(client, thread_id, turn["id"], self.persist_codex)
                     self.checkpoint_input(client, thread_id, turn["id"], record)
                     if time.monotonic() > deadline:
                         client.control("turn/interrupt", thread_id, turn["id"])

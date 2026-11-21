@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import queue
 import signal
+import shutil
 import subprocess
 import threading
 import time
@@ -23,7 +24,7 @@ class CodexError(RuntimeError):
 class Client:
     def __init__(self, workspace: Path, *, command=None, env=None, timeout=60):
         self.proc = subprocess.Popen(
-            command or ["codex", "app-server"],
+            command or (["codex-app-server"] if shutil.which("codex-app-server") else ["codex", "app-server"]),
             cwd=workspace,
             env=env,
             stdin=subprocess.PIPE,

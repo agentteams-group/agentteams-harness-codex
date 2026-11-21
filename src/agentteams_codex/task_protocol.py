@@ -74,6 +74,9 @@ def task_response(arguments, context, plugin):
     # Returning tool text must never silently clear this common guard.
     if outcome.get("requiresInputCheckpoint"):
         context["inputRefreshPending"] = True
+        from .input_barrier import checkpoint
+        checkpoint(outcome["refreshedInputs"])
+        context["inputRefreshPending"] = False
     metadata = {key: outcome[key] for key in
                 ("refreshedInputs", "requiresInputCheckpoint", "phaseComplete", "receiptId") if key in outcome}
     metadata['effect'] = outcome.get('effect') or result.get('effect', 'unknown')

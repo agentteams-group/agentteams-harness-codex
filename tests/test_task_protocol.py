@@ -75,15 +75,25 @@ def test_shared_result_fact_enters_native_tool_result_without_model_parsing(tmp_
     assert response['_meta']['agentteams.task']['phaseComplete'] is True
 
 
-def test_refreshed_input_guard_is_not_cleared_by_a_tool_json_result(tmp_path):
+def test_refreshed_input_guard_waits_for_native_durable_checkpoint(tmp_path):
+    import pytest
     context = {'role': 'manager'}
+    inputs = [{'eventId': '$later', 'body': 'Own late Human input'}]
     invoke = Mock(return_value={'result': {'ok': False, 'error': 'task_inputs_updated'},
-                                'requiresInputCheckpoint': True,
+                                'requiresInputCheckpoint': True, 'refreshedInputs': inputs,
                                 'contextUpdate': {'sources': [{'eventId': '$later'}]}})
     with patch.object(task_protocol, 'common', return_value=SimpleNamespace(invoke=invoke)):
-        response = task_protocol.task_response({'action': 'create'}, context, tmp_path)
+        with patch('agentteams_codex.input_barrier.checkpoint', side_effect=RuntimeError('no durable checkpoint')):
+            with pytest.raises(RuntimeError):
+                task_protocol.task_response({'action': 'create'}, context, tmp_path)
+        assert context['inputRefreshPending'] is True
+        def committed(sources):
+            assert sources == inputs
+            assert context['inputRefreshPending'] is True
+        with patch('agentteams_codex.input_barrier.checkpoint', side_effect=committed):
+            response = task_protocol.task_response({'action': 'create'}, context, tmp_path)
     assert response['isError'] is True
-    assert context['inputRefreshPending'] is True
+    assert context['inputRefreshPending'] is False
     assert context['sources'] == [{'eventId': '$later'}]
 
 
@@ -160,3 +170,34 @@ def test_native_phase_hook_blocks_shell_without_changing_execution_permissions()
         with pytest.raises(RecoveryConflict):
             check_phase_tool(context, {'tool_name': 'Bash'})
     check_phase_tool({'execution': 'task'}, {'tool_name': 'Bash'})
+
+
+def test_private_input_barrier_requires_exact_durable_sdk_ack_before_responding():
+    import threading
+    import time
+    from agentteams_codex.input_barrier import InputBarrier, checkpoint, ENV
+    for acknowledged in (True, False):
+        client = Mock()
+        client.request.return_value = {'persistedToActiveTurn': 'turn'} if acknowledged else {}
+        persist = Mock()
+        completed = []
+        with InputBarrier() as barrier, patch.dict(os.environ, {ENV: barrier.path}):
+            def sender():
+                try:
+                    checkpoint([{'eventId': '$source', 'body': 'Own fixture body'}])
+                    completed.append('persisted')
+                except RuntimeError:
+                    completed.append('blocked')
+            thread = threading.Thread(target=sender)
+            thread.start()
+            deadline = time.monotonic() + 5
+            while thread.is_alive() and time.monotonic() < deadline:
+                barrier.serve(client, 'thread', 'turn', persist)
+                time.sleep(.01)
+            thread.join(1)
+        assert completed == ['persisted' if acknowledged else 'blocked']
+        assert persist.call_count == int(acknowledged)
+        args = client.request.call_args.args
+        assert args[0] == 'thread/inject_items'
+        assert args[1]['persistToActiveTurn'] == 'turn'
+        assert args[1]['items'][0]['role'] == 'user'

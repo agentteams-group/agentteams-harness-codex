@@ -1,0 +1,208 @@
+diff --git a/codex-rs/app-server-protocol/src/protocol/v2/thread.rs b/codex-rs/app-server-protocol/src/protocol/v2/thread.rs
+index 367a4a6..045ab56 100644
+--- a/codex-rs/app-server-protocol/src/protocol/v2/thread.rs
++++ b/codex-rs/app-server-protocol/src/protocol/v2/thread.rs
+@@ -1293,12 +1293,20 @@ pub struct ThreadInjectItemsParams {
+     pub thread_id: String,
+     /// Raw Responses API items to append to the thread's model-visible history.
+     pub items: Vec<JsonValue>,
++    /// Append User messages durably to this exact active regular turn instead
++    /// of queueing them for later consumption. Intended for a caller holding
++    /// a tool result until new inputs have reached native history and rollout.
++    #[serde(default)]
++    #[ts(optional)]
++    pub persist_to_active_turn: Option<String>,
+ }
+ 
+ #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+ #[serde(rename_all = "camelCase")]
+ #[ts(export_to = "v2/")]
+-pub struct ThreadInjectItemsResponse {}
++pub struct ThreadInjectItemsResponse {
++    pub persisted_to_active_turn: Option<String>,
++}
+ 
+ #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+ #[serde(rename_all = "camelCase")]
+diff --git a/codex-rs/app-server/src/request_processors/turn_processor.rs b/codex-rs/app-server/src/request_processors/turn_processor.rs
+index 3ff64cd..596ce75 100644
+--- a/codex-rs/app-server/src/request_processors/turn_processor.rs
++++ b/codex-rs/app-server/src/request_processors/turn_processor.rs
+@@ -817,14 +817,21 @@ impl TurnRequestProcessor {
+             .map_err(invalid_request)?;
+         validate_response_item_image_urls(&items)?;
+ 
+-        thread
+-            .inject_response_items(items)
+-            .await
+-            .map_err(|err| match err {
+-                CodexErr::InvalidRequest(message) => invalid_request(message),
+-                err => internal_error(format!("failed to inject response items: {err}")),
+-            })?;
+-        Ok(ThreadInjectItemsResponse {})
++        let persisted_to_active_turn = params.persist_to_active_turn;
++        let result = if let Some(turn_id) = persisted_to_active_turn.as_deref() {
++            thread
++                .persist_user_items_to_active_turn(turn_id, &items)
++                .await
++        } else {
++            thread.inject_response_items(items).await
++        };
++        result.map_err(|err| match err {
++            CodexErr::InvalidRequest(message) => invalid_request(message),
++            err => internal_error(format!("failed to inject response items: {err}")),
++        })?;
++        Ok(ThreadInjectItemsResponse {
++            persisted_to_active_turn,
++        })
+     }
+ 
+     async fn set_app_server_client_info(
+diff --git a/codex-rs/core/src/codex_thread.rs b/codex-rs/core/src/codex_thread.rs
+index c80268e..db1ef5a 100644
+--- a/codex-rs/core/src/codex_thread.rs
++++ b/codex-rs/core/src/codex_thread.rs
+@@ -465,6 +465,18 @@ impl CodexThread {
+             .await;
+     }
+ 
++    /// Persist User inputs in an exact active regular turn before releasing a tool result.
++    pub async fn persist_user_items_to_active_turn(
++        &self,
++        expected_turn_id: &str,
++        items: &[ResponseItem],
++    ) -> CodexResult<()> {
++        self.codex
++            .session
++            .persist_user_items_to_active_turn(expected_turn_id, items)
++            .await
++    }
++
+     /// Record raw Responses API items without starting a new turn.
+     pub async fn inject_response_items(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
+         if items.is_empty() {
+diff --git a/codex-rs/core/src/session/inject.rs b/codex-rs/core/src/session/inject.rs
+index 5c5b7d1..b6ea270 100644
+--- a/codex-rs/core/src/session/inject.rs
++++ b/codex-rs/core/src/session/inject.rs
+@@ -35,6 +35,43 @@ impl Session {
+         }
+     }
+ 
++    /// Append User messages while the caller holds an active tool response.
++    /// No queued copy is created, so compaction and restart see the same history.
++    #[expect(
++        clippy::await_holding_invalid_type,
++        reason = "exact active turn validation and history append must remain atomic"
++    )]
++    pub(crate) async fn persist_user_items_to_active_turn(
++        &self,
++        expected_turn_id: &str,
++        items: &[ResponseItem],
++    ) -> codex_protocol::error::Result<()> {
++        use codex_protocol::error::CodexErr;
++        use codex_protocol::models::ContentItem;
++        if items.is_empty() || items.iter().any(|item| !matches!(item,
++            ResponseItem::Message { role, content, .. } if role == "user"
++                && !content.is_empty() && content.iter().all(|part| matches!(part, ContentItem::InputText { .. })))) {
++            return Err(CodexErr::InvalidRequest("durable active input requires non-empty User text messages".to_owned()));
++        }
++        let active = self.active_turn.lock().await;
++        let task = active
++            .as_ref()
++            .and_then(|turn| turn.task.as_ref())
++            .ok_or_else(|| {
++                CodexErr::InvalidRequest("no active turn for durable input".to_owned())
++            })?;
++        if task.turn_context.sub_id != expected_turn_id
++            || task.kind != crate::state::TaskKind::Regular
++        {
++            return Err(CodexErr::InvalidRequest(
++                "durable input does not match the active regular turn".to_owned(),
++            ));
++        }
++        self.record_conversation_items(task.turn_context.as_ref(), items)
++            .await;
++        self.flush_rollout().await
++    }
++
+     /// Starts a regular turn with the provided items only if automatic idle work
+     /// is allowed for the current session state.
+     ///
+diff --git a/codex-rs/core/src/session/tests.rs b/codex-rs/core/src/session/tests.rs
+index 5ebce9a..422185b 100644
+--- a/codex-rs/core/src/session/tests.rs
++++ b/codex-rs/core/src/session/tests.rs
+@@ -11127,3 +11127,72 @@ async fn session_start_hooks_require_project_trust_without_config_toml() -> std:
+ 
+     Ok(())
+ }
++
++#[tokio::test]
++async fn durable_active_user_input_enters_history_without_a_queued_copy() {
++    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
++    sess.spawn_task(
++        Arc::clone(&tc),
++        Vec::new(),
++        NeverEndingTask {
++            kind: TaskKind::Regular,
++            listen_to_cancellation_token: true,
++        },
++    )
++    .await;
++    let item = ResponseItem::Message {
++        id: None,
++        role: "user".to_string(),
++        content: vec![ContentItem::InputText {
++            text: "durable source fixture".to_string(),
++        }],
++        phase: None,
++        internal_chat_message_metadata_passthrough: None,
++    };
++    assert!(
++        sess.persist_user_items_to_active_turn("wrong-turn", std::slice::from_ref(&item))
++            .await
++            .is_err()
++    );
++    assert!(
++        !sess
++            .state
++            .lock()
++            .await
++            .clone_history()
++            .raw_items()
++            .contains(&item)
++    );
++    sess.persist_user_items_to_active_turn(&tc.sub_id, std::slice::from_ref(&item))
++        .await
++        .unwrap();
++    assert!(
++        sess.state
++            .lock()
++            .await
++            .clone_history()
++            .raw_items()
++            .contains(&item)
++    );
++    assert!(!sess.input_queue.has_pending_input(&sess.active_turn).await);
++    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
++}
++
++#[tokio::test]
++async fn durable_active_input_rejects_assistant_items() {
++    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
++    let item = ResponseItem::Message {
++        id: None,
++        role: "assistant".to_string(),
++        content: vec![ContentItem::OutputText {
++            text: "not a User input".to_string(),
++        }],
++        phase: None,
++        internal_chat_message_metadata_passthrough: None,
++    };
++    assert!(
++        sess.persist_user_items_to_active_turn("turn", &[item])
++            .await
++            .is_err()
++    );
++}
