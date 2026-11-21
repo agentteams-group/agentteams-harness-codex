@@ -604,7 +604,8 @@ class Bridge:
             if event["kind"] == "image":
                 image = attachment
         trace_event("inference.begin", model=model, room_id=event["room_id"], event_id=event["event_id"], layer="agent_turn")
-        with InputBarrier() as input_barrier, Client(working_directory, env={**environment, BARRIER_ENV: input_barrier.path}) as client:
+        with InputBarrier() as input_barrier, Client(working_directory, env={**environment, BARRIER_ENV: input_barrier.path},
+                trace_context=(event.get("_task_protocol_meta") or {}).get("otel_carrier")) as client:
             if event.get("message_execution") or any(task_context.get(key) for key in ("planning", "review", "completion")):
                 require_hooks(client, working_directory)
             try:

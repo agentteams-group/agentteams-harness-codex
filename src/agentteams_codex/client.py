@@ -22,7 +22,9 @@ class CodexError(RuntimeError):
 
 
 class Client:
-    def __init__(self, workspace: Path, *, command=None, env=None, timeout=60):
+    def __init__(self, workspace: Path, *, command=None, env=None, timeout=60, trace_context=None):
+        self.trace_context = {key: value for key, value in (trace_context or {}).items()
+                              if key in {"traceparent", "tracestate"} and isinstance(value, str)}
         self.proc = subprocess.Popen(
             command or (["codex-app-server"] if shutil.which("codex-app-server") else ["codex", "app-server"]),
             cwd=workspace,
@@ -87,7 +89,10 @@ class Client:
     def request(self, method, params):
         self.sequence += 1
         request_id = self.sequence
-        self.send({"id": request_id, "method": method, "params": params})
+        message = {"id": request_id, "method": method, "params": params}
+        if self.trace_context:
+            message["trace"] = self.trace_context
+        self.send(message)
         deadline = time.monotonic() + self.timeout
         while True:
             if time.monotonic() >= deadline:

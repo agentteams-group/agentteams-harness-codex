@@ -106,7 +106,8 @@ def main():
         env.pop('HTTP_PROXY', None)
         env.pop('HTTPS_PROXY', None)
         try:
-            with Client(workspace, command=json.loads(os.environ['CODEX_NATIVE_COMMAND']), env=env) as client:
+            with Client(workspace, command=json.loads(os.environ['CODEX_NATIVE_COMMAND']), env=env,
+                        trace_context={'traceparent': '00-123456789012345678901234567890ab-12345678901234ab-01'}) as client:
                 thread = client.open_thread(None, workspace, model, instructions + '\n' + fact)['id']
                 turn = client.start(thread, 'Use your task tool to register the own fixture request.')
                 completed = []
@@ -143,6 +144,9 @@ def main():
             assert not forbidden.intersection(attribute['key'] for attribute in attributes)
             assert any(attribute['key'] == 'gen_ai.usage.input_tokens' for attribute in attributes)
             assert any(span['name'] == 'mcp.tools.call' for span in spans)
+            native_turns = [span for span in spans if span['name'] == 'session_task.turn']
+            assert native_turns
+            assert all(span['traceId'] == '123456789012345678901234567890ab' for span in native_turns), 'SDK lost the trusted incoming trace carrier'
             evidence = os.getenv('CODEX_NATIVE_TRACE_EVIDENCE')
             if evidence:
                 Path(evidence).write_text(json.dumps(Collector.payloads, indent=2) + '\n')
