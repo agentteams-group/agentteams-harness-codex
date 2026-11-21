@@ -1,4 +1,4 @@
-AT_REF ?= c0fd53b39ac954585644b9302face733b28f1d85
+AT_REF ?= be64a98e04b21f0882ce320a5b4e139e76c08264
 AT_SOURCE ?= ../AgentTeams
 AT_CONTEXT ?= https://github.com/agentscope-ai/AgentTeams.git\#$(AT_REF)
 IMAGE ?= ghcr.io/agentteams-group/agentteams-harness-codex

@@ -6,7 +6,8 @@ from unittest import TestCase
 from unittest.mock import Mock
 
 core = Path(os.environ["AT_SOURCE"])
-sys.path[:0] = [str(core / "tests/lib"), str(core / "shared/lib")]
+support = Path(os.environ.get("AT_ASSISTANT_TEST_SUPPORT", core / "tests/lib"))
+sys.path[:0] = [str(support), str(core / "shared/lib")]
 from assistant_fixture import AssistantFixture
 from agentteams_codex.bridge import actionable_events
 from agentteams_codex.managed_matrix import ManagedMatrix
