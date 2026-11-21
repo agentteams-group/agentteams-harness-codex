@@ -7,7 +7,9 @@ from unittest.mock import Mock
 
 core = Path(os.environ["AT_SOURCE"])
 support = Path(os.environ.get("AT_ASSISTANT_TEST_SUPPORT", core / "tests/lib"))
-sys.path[:0] = [str(support), str(core / "shared/lib")]
+transport = core / "deepseek-harness/scripts" if (core / "deepseek-harness").is_dir() else core
+sys.path[:0] = [str(Path(__file__).resolve().parents[1] / "src"),
+                str(support), str(core / "shared/lib"), str(transport)]
 from assistant_fixture import AssistantFixture
 from agentteams_codex.bridge import actionable_events
 from agentteams_codex.managed_matrix import ManagedMatrix
