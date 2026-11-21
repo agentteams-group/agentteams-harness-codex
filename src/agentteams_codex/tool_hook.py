@@ -5,6 +5,7 @@ import sys
 
 from task_recovery import RecoveryConflict
 from worker_matrix_state import WorkerMatrix
+from .task_protocol import native_task_metadata
 
 COMMAND = "/opt/venv/bin/python -m agentteams_codex.tool_hook"
 
@@ -28,13 +29,14 @@ def checkpoint_tool(matrix, identity, hook):
 def confirm_native_tool(matrix, identity, item):
     """Only a terminal SDK item with a known successful outcome verifies the operation."""
     kind = item.get("type")
-    if item.get("status") != "completed":
+    no_effect = native_task_metadata(item).get('effect') == 'none'
+    if item.get("status") != "completed" and not (item.get('status') == 'failed' and no_effect):
         return
     if kind == "commandExecution":
         if item.get("exitCode") != 0:
             return
     elif kind == "mcpToolCall":
-        if item.get("error") or not isinstance(item.get("result"), dict) or item["result"].get("isError"):
+        if not no_effect and (item.get("error") or not isinstance(item.get("result"), dict) or item["result"].get("isError")):
             return
     elif kind == "dynamicToolCall":
         if item.get("success") is not True:
@@ -50,12 +52,22 @@ def confirm_native_tool(matrix, identity, item):
         matrix.message_finish_tools(identity, operation["id"], [{"id": item["id"], "content": item}])
 
 
+def check_phase_tool(context, hook):
+    if any(context.get(key) for key in ("planning", "review", "completion")):
+        if hook.get("tool_name") != "mcp__teamharness__task":
+            raise RecoveryConflict("This Task phase permits only the public Task tool")
+
+
 def main():
     scoped = os.getenv("AGENTTEAMS_CODEX_MESSAGE_EXECUTION")
-    if not scoped:
+    context = json.loads(os.getenv("AGENTTEAMS_CODEX_TASK_CONTEXT", "{}"))
+    if not scoped and not context:
         return
     try:
-        checkpoint_tool(WorkerMatrix("codex", device_delivery=True), json.loads(scoped), json.load(sys.stdin))
+        hook = json.load(sys.stdin)
+        check_phase_tool(context, hook)
+        if scoped:
+            checkpoint_tool(WorkerMatrix("codex", device_delivery=True), json.loads(scoped), hook)
     except Exception as error:
         # The SDK treats exit 2 as a blocking hook. Never print tool arguments
         # or full Controller responses into the model or runtime logs.

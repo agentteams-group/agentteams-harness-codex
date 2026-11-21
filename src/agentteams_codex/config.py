@@ -10,6 +10,7 @@ import yaml
 from task_recovery import enabled as managed_worker
 from worker_runtime_config import project
 from agentteams_skill_warnings import check_skill, report_warnings
+from .native_telemetry import configuration as native_telemetry_configuration
 
 
 def read_runtime(path: Path) -> dict:
@@ -92,7 +93,7 @@ def sync_assigned_skills(config: dict, home: Path, plugin: Path, builtin_ids=Non
     return warnings
 
 
-def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[str, str]:
+def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_attributes=None) -> tuple[str, str]:
     member = config["member"]
     role = _role(config)
     home.mkdir(parents=True, exist_ok=True)
@@ -140,12 +141,15 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
             {"member": member, "team": config.get("team", {})}, allow_unicode=True
         ),
         "Files received from Matrix are in inbox/. Read them with your tools. Put files you intend to return in outbox/. Reply directly in the current room; do not send the same reply again through MCP.",
-        "Use your native TeamHarness MCP tools for collaboration, task state, file synchronization and artifacts.",
-        "After sending a request to another member, end your turn so its reply can be processed as the next turn. Only report successful delivery or task completion after checking tool results and member evidence.",
+        "Use your native TeamHarness task tool for Task operations. The task system prepares inputs, advances accepted dependencies and delivers results to the original conversation automatically. Read its receipts; do not duplicate notifications.",
     ]
     if role == "manager":
         for path in manifest.get("prompts", {}).get("manager", {}).values():
             context.append((plugin / path).read_text())
+    task_contract = plugin / "skills/team/task-management/SKILL.md"
+    if task_contract.is_file():
+        contract = task_contract.read_text()
+        context.append(contract.partition("## Plan as Leader")[0] if role == "manager" else contract)
     inline = dict(desired.get("inlineConfig", {}))
     if managed_worker():
         for field, filename in (("identity", "IDENTITY.md"), ("soul", "SOUL.md"), ("agents", "AGENTS.md")):
@@ -189,7 +193,7 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
     lines += [
         "[mcp_servers.teamharness]",
         f"command = {json.dumps(sys.executable)}",
-        f"args = [{json.dumps(str(plugin / 'mcp/server.py'))}]",
+        'args = ["-m", "agentteams_codex.task_protocol"]',
         f"cwd = {json.dumps(str(plugin))}",
         "required = true",
         # Builtin TeamHarness already enforces Controller role/task authority.
@@ -201,13 +205,14 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
                 name
                 for name in os.environ
                 if name == "PYTHONPATH" or name.startswith(("AGENTTEAMS_", "TEAMHARNESS_", "MC_"))
-            )
+            ) + ["AGENTTEAMS_CODEX_TASK_CONTEXT"]
         ),
     ]
     lines += [
         "[mcp_servers.teamharness.env]",
         f"AGENTTEAMS_AGENT_ROLE = {json.dumps(role)}",
         f"AGENTTEAMS_WORKER_ROLE = {json.dumps(role)}",
+        f"AGENTTEAMS_PLUGIN_DIR = {json.dumps(str(plugin))}",
         f"TEAMHARNESS_SHARED_DIR = {json.dumps(str(workspace / 'shared'))}",
     ]
     for server in desired.get("mcpServers", []):
@@ -231,5 +236,6 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path) -> tuple[st
             ]
         else:
             raise ValueError(f"MCP server {name} requires url or command")
+    lines += native_telemetry_configuration(trace_attributes)
     (home / "config.toml").write_text("\n".join(lines) + "\n")
     return model, "\n\n".join(filter(None, context))

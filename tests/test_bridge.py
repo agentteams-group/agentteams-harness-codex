@@ -64,7 +64,7 @@ class StateTests(unittest.TestCase):
             supplement = {**event, "event_id": "$supplement", "body": "additional input", "control": True}
             bridge.journal.ingest([event, supplement], "cursor")
             bridge.controls.put((supplement, "/redirect", "additional input", "thread-1", "turn-1"))
-            with patch("agentteams_codex.bridge.prepare", return_value=("model", "instructions")), patch("agentteams_codex.bridge.Client") as factory:
+            with patch("agentteams_codex.bridge.prepare", return_value=("model", "instructions")), patch("agentteams_codex.bridge.prepare_turn", return_value=({'role': 'worker', 'sources': []}, '', None)), patch("agentteams_codex.bridge.Client") as factory:
                 client = factory.return_value.__enter__.return_value
                 client.open_thread.return_value = {"id": "thread-1", "turns": []}
                 client.start.return_value = {"id": "turn-1"}

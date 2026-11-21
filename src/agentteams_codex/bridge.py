@@ -21,7 +21,9 @@ from .client import Client, CodexError, completed_answer
 from .native_input import rollout_digest
 from .managed_matrix import ManagedMatrix
 from .tool_hook import confirm_native_tool, require_hooks
-from .config import managed_worker, prepare, read_runtime, sync_assigned_skills
+from .config import managed_worker, prepare, read_runtime, sync_assigned_skills, _role
+from .task_protocol import CONTEXT_ENV, prepare_turn, delivery_context, common
+from .native_telemetry import trace_attributes
 try:
     from runtime_observability import event as trace_event
 except ImportError:
@@ -272,6 +274,10 @@ class Bridge:
                      "coordination_session": "recovery:" + key,
                      "recovery": {"task_id": task_id, "team_id": team, "thread_id": None, "spec": claimed["spec"],
                                   **{k: execution[k] for k in ("instance_id", "generation", "process_id")}}}
+            if task.get("task_plan_id"):
+                event["_task_protocol_meta"] = {"teamharness_coordination": {
+                    "kind": "task_assigned", "task_id": task_id, "main_task_id": task.get("main_task_id", ""),
+                    "project_id": task.get("project_id", ""), "delivery_id": task.get("notifyTxn")}}
             # Supersede only the same Task's local admission. Other Matrix
             # backlog stays queued and its cursor is never reset.
             for old_id, old in list(self.journal.data["events"].items()):
@@ -335,6 +341,10 @@ class Bridge:
         except (CodexError, OSError, subprocess.SubprocessError, KeyError):
             return
         record["input_checkpointed"] = True
+        acknowledgements = record.pop("delivery_context_ack", {})
+        if acknowledgements:
+            common(self.plugin, "task_receipt").ack_delivery_context(
+                self.journal.data.setdefault("task_delivery_context", {}), acknowledgements)
         self.journal.save()
 
     def reply(self, event, text, suffix, approval=None):
@@ -550,7 +560,17 @@ class Bridge:
     def run_turn(self, event, record):
         trace_event("turn.begin", room_id=event["room_id"], event_id=event["event_id"])
         config = read_runtime(self.runtime_path)
-        model, instructions = prepare(config, self.home, self.workspace, self.plugin)
+        task_context, task_facts, task_output = prepare_turn(self.plugin, _role(config), event)
+        model, instructions = prepare(config, self.home, self.workspace, self.plugin,
+            trace_attributes=trace_attributes(config, event, task_context))
+        if task_facts:
+            instructions += "\n\n" + task_facts
+        delivered, acknowledgements = delivery_context(self.plugin, _role(config), event["room_id"],
+            self.journal.data.setdefault("task_delivery_context", {}))
+        if delivered:
+            instructions += "\n\n" + delivered
+            record["delivery_context_ack"] = acknowledgements
+        working_directory = task_output or self.workspace
         credential = os.getenv("AGENTTEAMS_WORKER_GATEWAY_KEY") or config.get(
             "desired", {}
         ).get("model", {}).get("gatewayKey", "")
@@ -558,6 +578,7 @@ class Bridge:
             **os.environ,
             "CODEX_GATEWAY_KEY": (config["desired"]["model"]["gatewayKey"] if managed_worker()
                                   else os.getenv("CODEX_GATEWAY_KEY") or credential),
+            CONTEXT_ENV: json.dumps(task_context, ensure_ascii=False, default=str),
         }
         thread_id = self.journal.data["rooms"].get(event.get("coordination_session", event["room_id"]))
         if event.get("recovery"):
@@ -582,17 +603,17 @@ class Bridge:
             if event["kind"] == "image":
                 image = attachment
         trace_event("inference.begin", model=model, room_id=event["room_id"], event_id=event["event_id"], layer="agent_turn")
-        with Client(self.workspace, env=environment) as client:
-            if event.get("message_execution"):
-                require_hooks(client, self.workspace)
+        with Client(working_directory, env=environment) as client:
+            if event.get("message_execution") or any(task_context.get(key) for key in ("planning", "review", "completion")):
+                require_hooks(client, working_directory)
             try:
-                thread = client.open_thread(thread_id, self.workspace, model, instructions)
+                thread = client.open_thread(thread_id, working_directory, model, instructions)
             except CodexError:
                 if not (event.get("recovery") or event.get("message_execution")) or not thread_id:
                     raise
                 # A matching marker is insufficient when the native archive
                 # was lost or the SDK has expired the session.
-                thread = client.open_thread(None, self.workspace, model, instructions)
+                thread = client.open_thread(None, working_directory, model, instructions)
             thread_id = thread["id"]
             self.journal.data["rooms"][event.get("coordination_session", event["room_id"])] = thread_id
             record["thread_id"] = thread_id
