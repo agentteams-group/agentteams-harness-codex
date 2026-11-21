@@ -13,10 +13,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: harness
+      - name: Read shared Core dependency
+        id: core
+        run: echo "ref=$(sed -n 's/^AT_REF ?= //p' harness/Makefile)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           repository: agentscope-ai/AgentTeams
-          ref: 4fca52d09d8568d6cbf5f5fc35f51b6a2c858db8
+          ref: ${{ steps.core.outputs.ref }}
           path: at
           submodules: recursive
       - uses: actions/setup-python@v5
@@ -31,6 +34,8 @@ jobs:
           docker run --rm --entrypoint agt codex-harness-test worker report-ready --help
           docker run --rm --entrypoint /opt/venv/bin/python3 \
             -e AT_SOURCE=/opt/agentteams/transport \
+            -e AT_ASSISTANT_TEST_SUPPORT=/at-tests \
+            -v "${{ github.workspace }}/at/tests/lib:/at-tests:ro" \
             -v "${{ github.workspace }}/harness/tests:/tests:ro" \
             codex-harness-test -m unittest discover -s /tests -v
           docker run --rm --entrypoint /opt/venv/bin/python3 -v "${{ github.workspace }}/harness/tests:/tests:ro" \
