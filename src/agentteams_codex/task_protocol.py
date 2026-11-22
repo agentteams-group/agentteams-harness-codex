@@ -29,7 +29,7 @@ def prepare_turn(plugin, role, event, call=None):
         notification = dict(notification)
         if notification.get("id"):
             admission = asyncio.run(common(plugin, "phase_recovery").notify(
-                notification["id"], "matrix:" + event["event_id"], "begin"))
+                notification["id"], event["event_id"], "begin"))
             if admission.get("active") is not True:
                 raise ValueError("Task phase is not active for this native message")
             if notification.get("kind") == "handoff":
