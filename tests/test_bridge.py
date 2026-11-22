@@ -61,9 +61,10 @@ class StateTests(unittest.TestCase):
             bridge.reply = Mock()
             bridge.direct_member = Mock(return_value=False)
             event = {"event_id": "$original", "room_id": "!dm", "sender": "@human:test", "body": "original", "kind": "text"}
-            supplement = {**event, "event_id": "$supplement", "body": "additional input", "control": True}
+            supplement = {**event, "event_id": "$supplement", "body": "additional input", "control": True,
+                          "execution_control": {"action": "steer"}}
             bridge.journal.ingest([event, supplement], "cursor")
-            bridge.controls.put((supplement, "/redirect", "additional input", "thread-1", "turn-1"))
+            bridge.controls.put((supplement, "/steer", "additional input", "thread-1", "turn-1"))
             with patch("agentteams_codex.bridge.prepare", return_value=("model", "instructions")), patch("agentteams_codex.bridge.prepare_turn", return_value=({'role': 'worker', 'sources': [], 'sourceEvent': '$request'}, '', None)), patch("agentteams_codex.bridge.Client") as factory:
                 client = factory.return_value.__enter__.return_value
                 client.open_thread.return_value = {"id": "thread-1", "turns": []}
@@ -75,6 +76,39 @@ class StateTests(unittest.TestCase):
             self.assertEqual(pending["status"], "queued")
             self.assertFalse(pending["event"]["control"])
             self.assertEqual(pending["event"]["body"], "additional input")
+
+    def test_dashboard_supplements_steer_the_same_turn_in_order(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bridge = Bridge.__new__(Bridge)
+            bridge.workspace = bridge.home = bridge.plugin = Path(temporary)
+            bridge.runtime_path = Path(temporary) / "runtime.yaml"
+            bridge.runtime_path.write_text("member:\n  runtime: codex\n")
+            bridge.config, bridge.agent_ids, bridge.user_id = {}, set(), "@agent:test"
+            bridge.journal = Journal(Path(temporary) / "journal.json")
+            bridge.controls, bridge.stop, bridge.pending_requests = queue.Queue(), threading.Event(), {}
+            bridge.reply, bridge.execution_status = Mock(), Mock()
+            bridge.direct_member = Mock(return_value=True)
+            event = {"event_id": "$original", "room_id": "!dm", "sender": "@human:test", "body": "original", "kind": "text"}
+            bridge.journal.ingest([event], "cursor")
+            bridge.active = {"event": event, "thread_id": "thread-1", "turn_id": "turn-1"}
+            for index in range(2):
+                self.assertTrue(bridge.handle_control({**event, "event_id": f"$supplement-{index}",
+                    "body": f"additional {index}", "execution_control": {
+                        "action": "steer", "agent_id": bridge.user_id, "run_id": "$original"}}))
+            with patch("agentteams_codex.bridge.prepare", return_value=("model", "instructions")), patch("agentteams_codex.bridge.prepare_turn", return_value=({'role': 'worker', 'sources': [], 'sourceEvent': '$request'}, '', None)), patch("agentteams_codex.bridge.Client") as factory:
+                client = factory.return_value.__enter__.return_value
+                client.open_thread.return_value = {"id": "thread-1", "turns": []}
+                client.start.return_value = {"id": "turn-1"}
+                client.next_event.return_value = {"method": "turn/completed", "params": {"turn": {"id": "turn-1", "status": "completed"}}}
+                bridge.run_turn(event, bridge.journal.data["events"]["$original"])
+            self.assertEqual([call.args for call in client.control.call_args_list], [
+                ("turn/steer", "thread-1", "turn-1", "additional 0"),
+                ("turn/steer", "thread-1", "turn-1", "additional 1")])
+            client.start.assert_called_once()
+            self.assertEqual([call.args[1] for call in bridge.execution_status.call_args_list], ["running"])
+            restored = Journal(bridge.journal.path)
+            for index in range(2):
+                self.assertEqual(restored.data["events"][f"$supplement-{index}"]["status"], "completed")
 
     def test_only_valid_cross_session_self_trigger_bypasses_self_filter(self):
         event = {

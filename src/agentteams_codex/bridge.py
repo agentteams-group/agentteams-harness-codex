@@ -398,11 +398,13 @@ class Bridge:
                 return control["action"] == "stop"
             if event["sender"] != active["event"]["sender"] or not self.direct_member(event):
                 return True
-            # Persist the supplementary event before interrupting: the poller
+            # Persist the supplementary event before steering: the poller
             # and native turn run on separate threads, and either may win.
             if control["action"] == "steer":
+                if not body.strip():
+                    return True
                 self.journal.ingest([{**event, "control": True}], self.journal.data["cursor"])
-            verb = "/redirect" if control["action"] == "steer" else "/cancel"
+            verb = ("/redirect" if event.get("kind") == "image" else "/steer") if control["action"] == "steer" else "/cancel"
             argument = body
         if verb not in {"/cancel", "/steer", "/approve", "/reject", "/answer"}:
             if verb != "/redirect" or control is None:
@@ -447,7 +449,8 @@ class Bridge:
         self.matrix.send_content(event["room_id"], {
             "msgtype": "m.notice", "body": {"running": "正在执行", "stopping": "正在停止", "stopped": "已停止", "completed": "本轮已结束", "failed": "执行失败"}[status],
             "com.agentteams.execution": {"run_id": event["event_id"], "status": status,
-                "capabilities": ["stop", "steer"], **({"message_id": message_id} if message_id else {})},
+                "capabilities": ["stop", "steer"], "steering_mode": "native",
+                **({"message_id": message_id} if message_id else {})},
         }, f"codex:{event['event_id']}:execution:{status}")
 
     def join_invites(self, payload, trusted):
@@ -715,6 +718,9 @@ class Bridge:
                                 client.control(
                                     "turn/steer", thread_id, turn["id"], argument
                                 )
+                                if source.get("execution_control"):
+                                    self.journal.data["events"][source["event_id"]]["status"] = "completed"
+                                    self.journal.save()
                             else:
                                 request_id, _, answer = argument.partition(" ")
                                 request = self.pending_requests.get(request_id)
@@ -782,8 +788,8 @@ class Bridge:
                                 self.managed.confirm_control(source, "native control accepted", retire=verb != "/redirect")
                             self.reply(source, "Codex control accepted.", "control")
                         except (ValueError, CodexError) as error:
-                            if verb == "/redirect":
-                                # Completion can win the race with interrupt.
+                            if verb == "/redirect" or (verb == "/steer" and source.get("execution_control")):
+                                # Completion can win the race with steering.
                                 # Keep the accepted supplement as a normal
                                 # follow-up in the same native thread.
                                 pending = self.journal.data["events"][source["event_id"]]
