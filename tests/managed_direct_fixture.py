@@ -102,6 +102,8 @@ class Controller(BaseHTTPRequestHandler):
                 else:
                     assert body['action'] in {'checkpoint', 'release'}
                     execution['checkpoint'] = body['checkpoint']
+                    operation_state = ((body['checkpoint'] or {}).get('operation') or {}).get('state')
+                    execution['state'] = 'needs_verification' if operation_state in {'started', 'unknown'} else 'active'
         item['version'] += 1
         if operation == 'native':
             return self.do_GET()
