@@ -87,8 +87,9 @@ def test_refreshed_input_guard_waits_for_native_durable_checkpoint(tmp_path):
             with pytest.raises(RuntimeError):
                 task_protocol.task_response({'action': 'create'}, context, tmp_path)
         assert context['inputRefreshPending'] is True
-        def committed(sources):
+        def committed(sources, native_context):
             assert sources == inputs
+            assert native_context["sources"] == [{"eventId": "$later"}]
             assert context['inputRefreshPending'] is True
         with patch('agentteams_codex.input_barrier.checkpoint', side_effect=committed):
             response = task_protocol.task_response({'action': 'create'}, context, tmp_path)
@@ -172,7 +173,7 @@ def test_native_phase_hook_blocks_shell_without_changing_execution_permissions()
     check_phase_tool({'execution': 'task'}, {'tool_name': 'Bash'})
 
 
-def test_private_input_barrier_requires_exact_durable_sdk_ack_before_responding():
+def test_private_input_barrier_requires_exact_durable_sdk_ack_before_responding(tmp_path):
     import threading
     import time
     from agentteams_codex.input_barrier import InputBarrier, checkpoint, ENV
@@ -181,10 +182,11 @@ def test_private_input_barrier_requires_exact_durable_sdk_ack_before_responding(
         client.request.return_value = {'persistedToActiveTurn': 'turn'} if acknowledged else {}
         persist = Mock()
         completed = []
-        with InputBarrier() as barrier, patch.dict(os.environ, {ENV: barrier.path}):
+        context = {'sourceEvent': '$original', 'sources': [{'eventId': '$original'}, {'eventId': '$source'}]}
+        with InputBarrier() as barrier, patch.dict(os.environ, {ENV: barrier.path}), patch('agentteams_codex.native_input.saved_input', return_value='own-row-proof'):
             def sender():
                 try:
-                    checkpoint([{'eventId': '$source', 'body': 'Own fixture body'}])
+                    checkpoint([{'eventId': '$source', 'body': 'Own fixture body'}], context)
                     completed.append('persisted')
                 except RuntimeError:
                     completed.append('blocked')
@@ -192,7 +194,7 @@ def test_private_input_barrier_requires_exact_durable_sdk_ack_before_responding(
             thread.start()
             deadline = time.monotonic() + 5
             while thread.is_alive() and time.monotonic() < deadline:
-                barrier.serve(client, 'thread', 'turn', persist)
+                barrier.serve(client, 'thread', 'turn', persist, context=context, home=tmp_path)
                 time.sleep(.01)
             thread.join(1)
         assert completed == ['persisted' if acknowledged else 'blocked']
@@ -201,3 +203,29 @@ def test_private_input_barrier_requires_exact_durable_sdk_ack_before_responding(
         assert args[0] == 'thread/inject_items'
         assert args[1]['persistToActiveTurn'] == 'turn'
         assert args[1]['items'][0]['role'] == 'user'
+        assert args[1]['spanAttributes']['agentteams.input.event_ids'] == '["$original","$source"]'
+
+
+def test_task_execution_does_not_load_ordinary_matrix_outbox_instructions(tmp_path):
+    plugin = tmp_path / 'plugin'
+    plugin.mkdir()
+    (plugin / 'plugin.yaml').write_text('skills: {}\n')
+    config = {'member': {'runtime': 'codex', 'role': 'worker'},
+              'desired': {'model': {'model': 'test', 'gatewayUrl': 'http://gateway'}}}
+    _, instructions = prepare(config, tmp_path / '.codex', tmp_path / 'work', plugin,
+                              task_scope={'execution': 'execution-task'})
+    assert 'Put files you intend to return in outbox/' not in instructions
+
+
+def test_native_mcp_and_parent_prepare_use_the_same_configured_task_storage(tmp_path):
+    import tomllib
+    plugin = tmp_path / 'plugin'
+    plugin.mkdir()
+    (plugin / 'plugin.yaml').write_text('skills: {}\n')
+    config = {'member': {'runtime': 'codex', 'role': 'worker'},
+              'desired': {'model': {'model': 'test', 'gatewayUrl': 'http://gateway'}}}
+    shared = str(tmp_path / 'operator-configured-shared')
+    with patch.dict(os.environ, {'TEAMHARNESS_SHARED_DIR': shared}):
+        prepare(config, tmp_path / '.codex', tmp_path / 'work', plugin)
+    native = tomllib.loads((tmp_path / '.codex/config.toml').read_text())
+    assert native['mcp_servers']['teamharness']['env']['TEAMHARNESS_SHARED_DIR'] == shared

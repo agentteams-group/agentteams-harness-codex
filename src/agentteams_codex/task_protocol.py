@@ -56,6 +56,10 @@ def prepare_turn(plugin, role, event, call=None):
 
 
 def task_response(arguments, context, plugin):
+    from .admission import load, admit, publish_context, phase_complete
+    frame = load()
+    if frame:
+        admit(frame)
     try:
         outcome = common(plugin, "task_native").invoke({"operation": "task", "arguments": arguments,
                                                        "context": context})
@@ -64,7 +68,7 @@ def task_response(arguments, context, plugin):
             raise
         outcome = {"result": {"ok": False, "error": "native_task_context_unavailable", "message": str(error), "effect": "none"},
                    "effect": "none", "phaseComplete": False}
-    result = outcome["result"]
+    result = outcome.get("result", outcome)
     if outcome.get("contextUpdate"):
         context.update(outcome["contextUpdate"])
     content = [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]
@@ -75,8 +79,10 @@ def task_response(arguments, context, plugin):
     if outcome.get("requiresInputCheckpoint"):
         context["inputRefreshPending"] = True
         from .input_barrier import checkpoint
-        checkpoint(outcome["refreshedInputs"])
+        checkpoint(outcome["refreshedInputs"], context)
         context["inputRefreshPending"] = False
+    publish_context(context)
+    phase_complete(outcome, context)
     metadata = {key: outcome[key] for key in
                 ("refreshedInputs", "requiresInputCheckpoint", "phaseComplete", "receiptId") if key in outcome}
     metadata['effect'] = outcome.get('effect') or result.get('effect', 'unknown')

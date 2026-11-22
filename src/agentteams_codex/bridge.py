@@ -10,6 +10,7 @@ import shutil
 import signal
 import sqlite3
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -18,10 +19,11 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .client import Client, CodexError, completed_answer
-from .native_input import rollout_digest
+from .native_input import rollout_digest, checkpoint_rows_present
 from .input_barrier import InputBarrier, ENV as BARRIER_ENV
+from .admission import Scope as NativeScope, ENV as SCOPE_ENV, COMMAND_ENV as ADMISSION_COMMAND_ENV
 from .managed_matrix import ManagedMatrix
-from .tool_hook import confirm_native_tool, require_hooks
+from .tool_hook import require_hooks
 from .config import managed_worker, prepare, read_runtime, sync_assigned_skills, _role
 from .task_protocol import CONTEXT_ENV, prepare_turn, delivery_context, common
 from .native_telemetry import trace_attributes
@@ -118,8 +120,16 @@ class Journal:
     def save(self):
         with self.lock:
             temporary = self.path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(self.data, ensure_ascii=False) + "\n")
+            with temporary.open("w") as stream:
+                stream.write(json.dumps(self.data, ensure_ascii=False) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
             temporary.replace(self.path)
+            directory = os.open(self.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
             prefix = os.getenv("AGENTTEAMS_STORAGE_PREFIX")
             if prefix:
                 mc(
@@ -330,6 +340,11 @@ class Bridge:
         snapshot_codex(self.home, path)
         if prefix:
             mc("cp", str(path), f"{prefix}/agents/{self.name}/runtime/{path.name}")
+
+    def checkpoint_refreshed_input(self, record, frame):
+        self.persist_codex(include_workspace=False)
+        record["native_task_context"] = frame
+        self.journal.save()
 
     def checkpoint_input(self, client, thread_id, turn_id, record):
         if record.get("input_checkpointed"):
@@ -562,8 +577,14 @@ class Bridge:
         trace_event("turn.begin", room_id=event["room_id"], event_id=event["event_id"])
         config = read_runtime(self.runtime_path)
         task_context, task_facts, task_output = prepare_turn(self.plugin, _role(config), event)
+        saved = record.get("native_task_context") or {}
+        if (saved.get("sourceEvent") == event["event_id"]
+                and checkpoint_rows_present(self.home, saved.get("threadId"), saved.get("rows"))):
+            task_context.update(sources=saved["sources"], inputRefreshPending=False)
+            task_facts += "\n[Task input references]\n" + json.dumps([
+                {key: source[key] for key in ("inputId", "eventId")} for source in saved["sources"]])
         model, instructions = prepare(config, self.home, self.workspace, self.plugin,
-            trace_attributes=trace_attributes(config, event, task_context))
+            trace_attributes=trace_attributes(config, event, task_context), task_scope=task_context)
         if task_facts:
             instructions += "\n\n" + task_facts
         delivered, acknowledgements = delivery_context(self.plugin, _role(config), event["room_id"],
@@ -581,6 +602,14 @@ class Bridge:
                                   else os.getenv("CODEX_GATEWAY_KEY") or credential),
             CONTEXT_ENV: json.dumps(task_context, ensure_ascii=False, default=str),
         }
+        native_scope = NativeScope(self.home, self.plugin, task_context,
+            {'kind': 'task', 'identity': event['recovery']} if event.get('recovery') else
+            {'kind': 'message', 'identity': event['message_execution']} if event.get('message_execution') else None)
+        scratch = Path((task_context.get('context') or {}).get('scratchDirectory') or self.workspace / '.scratch')
+        scratch.mkdir(parents=True, exist_ok=True)
+        environment.update({SCOPE_ENV: str(native_scope.path),
+                            ADMISSION_COMMAND_ENV: json.dumps([sys.executable, '-m', 'agentteams_codex.admission']),
+                            'TMPDIR': str(scratch)})
         thread_id = self.journal.data["rooms"].get(event.get("coordination_session", event["room_id"]))
         if event.get("recovery"):
             thread_id = event["recovery"].get("thread_id")
@@ -606,7 +635,7 @@ class Bridge:
         trace_event("inference.begin", model=model, room_id=event["room_id"], event_id=event["event_id"], layer="agent_turn")
         with InputBarrier() as input_barrier, Client(working_directory, env={**environment, BARRIER_ENV: input_barrier.path},
                 trace_context=(event.get("_task_protocol_meta") or {}).get("otel_carrier")) as client:
-            if event.get("message_execution") or any(task_context.get(key) for key in ("planning", "review", "completion")):
+            if event.get("message_execution") or event.get("recovery") or any(task_context.get(key) for key in ("planning", "review", "completion")):
                 require_hooks(client, working_directory)
             try:
                 thread = client.open_thread(thread_id, working_directory, model, instructions)
@@ -658,7 +687,9 @@ class Bridge:
             last_progress = {}
             try:
                 while not self.stop.is_set():
-                    input_barrier.serve(client, thread_id, turn["id"], self.persist_codex)
+                    input_barrier.serve(client, thread_id, turn["id"],
+                        lambda frame: self.checkpoint_refreshed_input(record, frame),
+                        context=task_context, home=self.home)
                     self.checkpoint_input(client, thread_id, turn["id"], record)
                     if time.monotonic() > deadline:
                         client.control("turn/interrupt", thread_id, turn["id"])
@@ -767,8 +798,6 @@ class Bridge:
                     method, params = message.get("method", ""), message.get(
                         "params", {}
                     )
-                    if event.get("message_execution") and method == "item/completed":
-                        confirm_native_tool(self.managed.matrix, event["message_execution"], params.get("item") or {})
                     if "id" in message and method:
                         if method == "item/permissions/requestApproval":
                             client.send(

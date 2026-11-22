@@ -37,7 +37,7 @@ def rollout_digest(home, thread_id):
     return None
 
 
-def saved_input(home, thread_id, text):
+def saved_message(home, thread_id, role, text):
     path = rollout_path(home, thread_id)
     if path:
         with path.open("rb") as stream:
@@ -47,9 +47,13 @@ def saved_input(home, thread_id, text):
                 row = json.loads(line)
                 item = row.get("payload", {})
                 if (row.get("type") == "response_item" and item.get("type") == "message"
-                        and item.get("role") == "user" and item.get("content") == [{"type": "input_text", "text": text}]):
+                        and item.get("role") == role and item.get("content") == [{"type": "input_text", "text": text}]):
                     return hashlib.sha256(line).hexdigest()
     return None
+
+
+def saved_input(home, thread_id, text):
+    return saved_message(home, thread_id, "user", text)
 
 
 def commit_source(client, home, thread_id, matrix, key, view, persist):
@@ -76,3 +80,15 @@ def commit_source(client, home, thread_id, matrix, key, view, persist):
         if not matrix.native_current(view, thread_id, digest):
             raise RecoveryConflict("Codex native input belongs to a different Worker start")
     return digest
+
+
+def checkpoint_rows_present(home, thread_id, digests):
+    """Verify owned native row receipts without interpreting User message bodies."""
+    if not digests:
+        return False
+    path = rollout_path(home, thread_id)
+    if path is None:
+        return False
+    with path.open('rb') as stream:
+        present = {hashlib.sha256(row).hexdigest() for row in stream if row.endswith(b'\n')}
+    return set(digests).issubset(present)

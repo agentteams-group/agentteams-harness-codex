@@ -93,7 +93,7 @@ def sync_assigned_skills(config: dict, home: Path, plugin: Path, builtin_ids=Non
     return warnings
 
 
-def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_attributes=None) -> tuple[str, str]:
+def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_attributes=None, task_scope=None) -> tuple[str, str]:
     member = config["member"]
     role = _role(config)
     home.mkdir(parents=True, exist_ok=True)
@@ -140,6 +140,7 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
         + yaml.safe_dump(
             {"member": member, "team": config.get("team", {})}, allow_unicode=True
         ),
+        "" if any((task_scope or {}).get(key) for key in ("execution", "planning", "review", "completion")) else
         "Files received from Matrix are in inbox/. Read them with your tools. Put files you intend to return in outbox/. Reply directly in the current room; do not send the same reply again through MCP.",
         "Use your native TeamHarness task tool for Task operations. The task system prepares inputs, advances accepted dependencies and delivers results to the original conversation automatically. Read its receipts; do not duplicate notifications.",
     ]
@@ -190,6 +191,7 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
             'wire_api = "responses"',
             "supports_websockets = false",
         ]
+    lines += ['[sandbox_workspace_write]', 'exclude_slash_tmp = true']
     lines += [
         "[mcp_servers.teamharness]",
         f"command = {json.dumps(sys.executable)}",
@@ -205,7 +207,7 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
                 name
                 for name in os.environ
                 if name == "PYTHONPATH" or name.startswith(("AGENTTEAMS_", "TEAMHARNESS_", "MC_"))
-            ) + ["AGENTTEAMS_CODEX_TASK_CONTEXT", "AGENTTEAMS_CODEX_INPUT_BARRIER"]
+            ) + ["AGENTTEAMS_CODEX_TASK_CONTEXT", "AGENTTEAMS_CODEX_INPUT_BARRIER", "AGENTTEAMS_CODEX_NATIVE_SCOPE"]
         ),
     ]
     lines += [
@@ -213,7 +215,7 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
         f"AGENTTEAMS_AGENT_ROLE = {json.dumps(role)}",
         f"AGENTTEAMS_WORKER_ROLE = {json.dumps(role)}",
         f"AGENTTEAMS_PLUGIN_DIR = {json.dumps(str(plugin))}",
-        f"TEAMHARNESS_SHARED_DIR = {json.dumps(str(workspace / 'shared'))}",
+        f"TEAMHARNESS_SHARED_DIR = {json.dumps(os.getenv('TEAMHARNESS_SHARED_DIR') or os.getenv('AGENTTEAMS_SHARED_DIR') or str(home.parent / 'shared'))}",
     ]
     for server in desired.get("mcpServers", []):
         name = server.get("name", "")

@@ -9,7 +9,7 @@ set -euo pipefail
 source /opt/agentteams/scripts/lib/agentteams-env.sh
 AGENTTEAMS_WORKER_NAME="${AGENTTEAMS_WORKER_NAME:?AGENTTEAMS_WORKER_NAME is required}"
 WORKER_HOME="${AGENTTEAMS_WORKER_HOME:-/root/agentteams-fs/agents/${AGENTTEAMS_WORKER_NAME}}"
-mkdir -p "${WORKER_HOME}/runtime" "${WORKER_HOME}/.codex" "${WORKER_HOME}/workspace"
+mkdir -p "${WORKER_HOME}/runtime" "${WORKER_HOME}/.codex" "${WORKER_HOME}/workspace" "${WORKER_HOME}/shared"
 
 if ! ensure_mc_credentials || ! agentteams_mc_host_configured; then
     if [ "${AGENTTEAMS_STORAGE_PROVIDER:-minio}" = oss ]; then
@@ -24,6 +24,7 @@ export HOME="${WORKER_HOME}"
 export CODEX_HOME="${WORKER_HOME}/.codex"
 export TEAMHARNESS_RUNTIME_CONFIG="${WORKER_HOME}/runtime/runtime.yaml"
 export TEAMHARNESS_WORKSPACE="${WORKER_HOME}/workspace"
+export TEAMHARNESS_SHARED_DIR="${TEAMHARNESS_SHARED_DIR:-${AGENTTEAMS_SHARED_DIR:-${WORKER_HOME}/shared}}"
 export AGENTTEAMS_PLUGIN_DIR=/opt/agentteams/plugins/teamharness
 export AGENTTEAMS_MATRIX_USER_ID="@${AGENTTEAMS_WORKER_NAME}:${AGENTTEAMS_MATRIX_DOMAIN}"
 
