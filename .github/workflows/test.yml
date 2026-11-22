@@ -1,43 +1,109 @@
-name: Codex Harness tests
+name: Codex formal arm64 candidate artifact
 on:
   workflow_dispatch:
-  pull_request:
-  push:
-    branches: [main]
 permissions:
   contents: read
+  actions: read
+concurrency:
+  group: codex-formal-candidate-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  formal-candidate:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
     steps:
+      - name: Check isolated runner resources
+        run: |
+          uname -a
+          free -m
+          df -h
+          test "$(uname -m)" = aarch64
+          test "$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}')" -ge 14680064
       - uses: actions/checkout@v4
         with:
+          ref: 084cc70aea0ab5c52817370c0529dd09ddfee225
           path: harness
       - uses: actions/checkout@v4
         with:
           repository: agentscope-ai/AgentTeams
-          ref: 4fca52d09d8568d6cbf5f5fc35f51b6a2c858db8
+          ref: 663615d7e5d5a85887999b75b510347a1edfdbcc
           path: at
-          submodules: recursive
+          fetch-depth: 1
+      - run: git -C at submodule update --init --depth 1 deepseek-harness
+      - uses: actions/download-artifact@v4
+        with:
+          name: codex-native-arm64-test-binary
+          run-id: 44981563905
+          github-token: ${{ github.token }}
+          path: native-artifact
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: at/agentteams-controller/go.mod
+          cache-dependency-path: at/agentteams-controller/go.sum
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install -e ./harness
-      - run: make -C harness test AT_SOURCE=${{ github.workspace }}/at
-      - run: bash -n harness/scripts/entrypoint.sh
-      - name: Test the actual container Python and transport assets
+      - name: Verify immutable inputs and build matching Task CLI
         run: |
-          docker build --build-context at=./at -t codex-harness-test ./harness
-          docker run --rm --entrypoint agt codex-harness-test worker report-ready --help
-          docker run --rm --entrypoint /opt/venv/bin/python3 \
-            -e AT_SOURCE=/opt/agentteams/transport \
-            -v "${{ github.workspace }}/harness/tests:/tests:ro" \
-            codex-harness-test -m unittest discover -s /tests -v
-          docker run --rm --entrypoint /opt/venv/bin/python3 -v "${{ github.workspace }}/harness/tests:/tests:ro" \
-            codex-harness-test /tests/native_input_smoke.py
-          for decision in allow deny; do
-            docker run --rm --network none --entrypoint /opt/venv/bin/python3 -v "${{ github.workspace }}/harness/tests:/tests:ro" \
-              codex-harness-test /tests/native_tool_smoke.py "$decision"
+          mkdir -p artifact cli-artifact
+          echo 'e47caa99cd7f65b874352d97e80d8a32b2200e7ec615aa59ab9e7009495b3338  native-artifact/codex-app-server' | sha256sum -c -
+          chmod +x native-artifact/codex-app-server
+          test "$(sha256sum harness/patches/codex-durable-user-input.patch | cut -d' ' -f1)" = "$(awk '/codex-durable-user-input.patch$/ {print $1}' native-artifact/build-inputs.sha256)"
+          git -C at fetch --depth 1 origin 204a42e8cb4fc963a6961872e3d32e9722b0f45f
+          test "$(git -C at rev-parse HEAD:agentteams-controller)" = "$(git -C at rev-parse 204a42e8cb4fc963a6961872e3d32e9722b0f45f:agentteams-controller)"
+          (cd at/agentteams-controller && CGO_ENABLED=0 go build -buildvcs=false -o "$GITHUB_WORKSPACE/cli-artifact/agt" ./cmd/agt/)
+          sha256sum cli-artifact/agt > artifact/cli.sha256
+          git -C at rev-parse HEAD:agentteams-controller > artifact/controller-source-tree.sha
+          python -m pip install -e ./harness 'pytest>=8,<9'
+          AT_SOURCE="$GITHUB_WORKSPACE/at" PYTHONPATH="$GITHUB_WORKSPACE/at/shared/lib:$GITHUB_WORKSPACE/at/deepseek-harness/scripts" python -m pytest harness/tests -q -p no:cacheprovider
+      - name: Prepare artifact-only stages with identical formal final stage
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib,json
+          source=Path('harness/Dockerfile').read_text()
+          start=source.index('# Fixed native SDK capability:')
+          final=source.index('FROM node:22.22-bookworm-slim\n')
+          derived=source[:start].replace('FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS controller','FROM scratch AS controller\nCOPY --chmod=0755 --from=cli-artifact /agt /usr/local/bin/agt')
+          derived+='FROM scratch AS native-sdk\nCOPY --chmod=0755 --from=native-artifact /codex-app-server /usr/local/bin/codex-app-server\n'+source[final:]
+          assert derived[derived.index('FROM node:'):]==source[final:]
+          Path('harness/.formal-artifact.Dockerfile').write_text(derived)
+          Path('artifact/source.Dockerfile').write_text(source)
+          Path('artifact/candidate.Dockerfile').write_text(derived)
+          Path('artifact/provenance.json').write_text(json.dumps({'runtimeCommit':'084cc70aea0ab5c52817370c0529dd09ddfee225','coreCommit':'663615d7e5d5a85887999b75b510347a1edfdbcc','controllerEquivalentSourceCommit':'204a42e8cb4fc963a6961872e3d32e9722b0f45f','nativeArtifactRun':44981563905,'nativeBinarySha256':'e47caa99cd7f65b874352d97e80d8a32b2200e7ec615aa59ab9e7009495b3338','sdkSource':'rust-v0.143.0/c4d748f586a84a3ed5b6aceb82e9a1db4abb1cda plus frozen4f07395 patch','sdkArtifactProfile':'dev-small opt-level0 debugnone; no release performance claim','productionSDKProfile':'release; unchanged production Dockerfile','finalStageByteEquivalent':True,'sourceDockerfileSha256':hashlib.sha256(source.encode()).hexdigest(),'candidateDockerfileSha256':hashlib.sha256(derived.encode()).hexdigest(),'publishing':False},indent=2)+'\n')
+          PY
+      - uses: docker/setup-buildx-action@v3
+      - name: Build formal final stage without SDK recompile or publishing
+        run: |
+          docker buildx build --load --platform linux/arm64 --metadata-file artifact/build-metadata.json --build-context at=./at --build-context native-artifact=./native-artifact --build-context cli-artifact=./cli-artifact -f harness/.formal-artifact.Dockerfile -t codex-formal-candidate:local ./harness 2>&1 | tee artifact/build.log
+      - name: Verify installed production assets and native boundaries
+        run: |
+          docker image inspect codex-formal-candidate:local > artifact/image-inspect.json
+          docker run --rm --network none --entrypoint bash codex-formal-candidate:local -ec 'node --version; codex --version; python3 --version; /opt/venv/bin/python --version; sha256sum /usr/local/bin/codex-app-server /opt/agentteams/entrypoint.sh /usr/local/bin/agt; ldd /usr/local/bin/codex-app-server; bash -n /opt/agentteams/entrypoint.sh; /usr/local/bin/agt task --help' > artifact/installed-assets.log 2>&1
+          docker run --rm --network none --entrypoint /opt/venv/bin/python -v "$GITHUB_WORKSPACE/harness/tests:/tests:ro" codex-formal-candidate:local /tests/native_input_smoke.py > artifact/native-input.log 2>&1
+          for fixture in native_task_protocol_smoke native_admission_smoke; do
+            docker run --rm --network none --user "$(id -u):$(id -g)" --entrypoint /opt/venv/bin/python -v "$GITHUB_WORKSPACE/harness/tests:/tests:ro" -v "$GITHUB_WORKSPACE/at:/core:ro" -v "$GITHUB_WORKSPACE/artifact:/evidence" -e AT_SOURCE=/core -e 'CODEX_NATIVE_COMMAND=["/usr/local/bin/codex-app-server"]' -e CODEX_NATIVE_REFRESH_FIXTURE=false -e "CODEX_NATIVE_TRACE_EVIDENCE=/evidence/$fixture-otel.json" codex-formal-candidate:local "/tests/$fixture.py" > "artifact/$fixture.log" 2>&1
           done
-      - name: Verify native stop and supplement against App Server
-        run: make -C harness direct-control-smoke IMAGE=codex-harness-test VERSION=latest
+      - name: Verify native direct steering and stop in the candidate image
+        run: |
+          for action in steer stop; do
+            docker run --rm --network none --entrypoint /opt/venv/bin/python -v "$GITHUB_WORKSPACE/harness/tests:/tests:ro" -v "$GITHUB_WORKSPACE/at:/core:ro" -e AT_SOURCE=/core codex-formal-candidate:local /tests/direct_control_smoke.py "$action" > "artifact/native-direct-$action.log" 2>&1
+          done
+      - name: Export candidate archive and exact provenance
+        run: |
+          git -C harness rev-parse HEAD > artifact/runtime.sha
+          git -C at rev-parse HEAD > artifact/core.sha
+          git -C at submodule status deepseek-harness > artifact/transport.sha
+          printf '%s\n' "${{ github.sha }}" > artifact/workflow.sha
+          cp native-artifact/build-profile.txt artifact/sdk-build-profile.txt
+          cp native-artifact/build-inputs.sha256 artifact/sdk-build-inputs.sha256
+          docker save codex-formal-candidate:local | gzip -1 > artifact/codex-formal-arm64.tar.gz
+          (cd artifact && sha256sum codex-formal-arm64.tar.gz > SHA256SUMS)
+          df -h
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: codex-formal-arm64-candidate
+          path: artifact/
+          retention-days: 3
+          if-no-files-found: error
