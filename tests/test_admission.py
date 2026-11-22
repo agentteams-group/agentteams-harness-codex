@@ -88,3 +88,15 @@ def test_private_callback_blocked_outcome_survives_scope_restore(tmp_path, monke
         restored.require_admitted()
     admission.mark_blocked(False)
     restored.require_admitted()
+
+
+def test_manager_without_owned_execution_keeps_generic_tools_fenced():
+    from task_operation import tool_policy
+    manager = {**frame(), 'context': {'sourceEvent': '$manager-dm', 'role': 'manager'}, 'recovery': None}
+    with patch('task_recovery_rpc.execute', side_effect=lambda request: tool_policy(request.get('registration'))), \
+            patch.object(admission, 'admit'):
+        with pytest.raises(RecoveryConflict, match='durable execution admission'):
+            tool_hook.scoped_tool(manager, hook(name='Bash'))
+        # Canonical Task remains owned by the common authority rather than a
+        # second, fabricated generic execution transaction.
+        tool_hook.scoped_tool(manager, hook())

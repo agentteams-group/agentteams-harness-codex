@@ -169,7 +169,7 @@ class ManagedMatrix:
             if changed:
                 journal.save()
 
-    def commit_for_turn(self, client, thread_id, event):
+    def commit_for_turn(self, client, thread_id, event, *, active_turn_id=None):
         matrix = self.matrix
         room = event["room_id"]
         if room not in self.joined:
@@ -196,7 +196,8 @@ class ManagedMatrix:
                     continue
             elif key != matrix_event_key(room, event["event_id"]):
                 raise RecoveryConflict("Retained Matrix input does not match Codex turn")
-            commit_source(client, self.bridge.home, thread_id, matrix, key, view, self.bridge.persist_codex)
+            commit_source(client, self.bridge.home, thread_id, matrix, key, view, self.bridge.persist_codex,
+                          active_turn_id=active_turn_id)
             self.receipts.enqueue(room, item["event_id"], "received")
             self.receipts.committed([item["event_id"]])
 

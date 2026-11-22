@@ -707,7 +707,7 @@ class Bridge:
                                     "The requested Codex turn has already ended"
                                 )
                             if source.get("control_execution"):
-                                self.managed.commit_for_turn(client, thread_id, source)
+                                self.managed.commit_for_turn(client, thread_id, source, active_turn_id=turn["id"])
                             if verb in {"/cancel", "/redirect"}:
                                 client.control("turn/interrupt", thread_id, turn["id"])
                                 if direct and source.get("execution_control"):
