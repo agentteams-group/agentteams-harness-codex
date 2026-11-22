@@ -24,3 +24,15 @@ Worker and Leader Steer passed against the actual AppServer and actual managed h
 - **Codex Manager ordinary management tools:** `task_recovery.enabled()` excludes Manager, so `Bridge` has no ManagedMatrix execution admission. `run_turn` still supplies a private native scope, and generic tool hooks correctly reject `Native tool requires a durable execution admission`. This affects native shell and noncanonical MCP tools in an ordinary Manager conversation. No-tool chat and the fixed canonical Task tool's separate common authority do not require that generic execution scope; Task-only planning/review/terminal phases are separate paths. This is a known scope gap, not an authorization request and not evidence of Manager operations passing. A focused test retains the fence. The packaged cloud failure was observed in run `44990094421`, `native-direct-steer.log`.
 
 The current six-Harness collaboration experiment uses QwenPaw Manager. These direct-conversation gates must not be represented as completed certification or silently bypassed, but they do not require changing the public Task protocol for normal Worker/Leader Task trials.
+
+## Production sandbox dependency preflight
+
+The first real Worker business command found a separate packaging failure: the final Node22 image omitted system `bubblewrap`, and the custom SDK executable had no adjacent `codex-resources/bwrap`. The native launcher requires either a system `bwrap` supporting `--perms`, or its bundled helper. Installing Debian's `bubblewrap` in the final stage supplies the missing runtime dependency; it does not change sandbox policy or clear the unknown-effect fence from the failed attempt.
+
+Before a new real task, run this in the actual candidate image with the same container security settings as a Worker:
+
+```
+python tests/native_tool_smoke.py allow workspace-write
+```
+
+This uses the actual AppServer and managed tool hooks. The command must create a file in its writable workspace and fail to create one outside it, while completing its owned tool checkpoint. Merely checking `bwrap --version` is insufficient. The original Direct fixture explicitly uses `danger-full-access` and therefore did not cover this dependency. If the workspace-write check instead fails at namespace creation, report the actual container user-namespace/seccomp capability failure; do not switch to an unrestricted sandbox or add privileged execution to make it pass. The earlier failed task remains verification-required and must not be silently replayed.

@@ -22,7 +22,7 @@ FROM node:22.22-bookworm-slim
 ARG CODEX_VERSION=0.143.0
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git jq python3 python3-venv tini \
+    bubblewrap ca-certificates curl git jq python3 python3-venv tini \
     && rm -rf /var/lib/apt/lists/*
 RUN --mount=type=cache,target=/root/.npm npm install --global --no-audit --no-fund --loglevel=info \
     --registry="${NPM_REGISTRY}" --fetch-timeout=60000 --fetch-retries=1 "@openai/codex@${CODEX_VERSION}"
