@@ -1,43 +1,90 @@
-name: Codex Harness tests
+name: Codex native arm64 artifact validation
 on:
   workflow_dispatch:
-  pull_request:
-  push:
-    branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: codex-native-artifact-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  native-artifact:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
     steps:
+      - name: Check isolated runner resources
+        run: |
+          uname -a
+          free -m
+          df -h
+          test "$(uname -m)" = aarch64
+          test "$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}')" -ge 14680064
+          test "$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)" -ge 10485760
       - uses: actions/checkout@v4
         with:
           path: harness
+      - name: Read exact shared Core dependency
+        id: core
+        run: echo "ref=$(sed -n 's/^AT_REF ?= //p' harness/Makefile)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           repository: agentscope-ai/AgentTeams
-          ref: 4fca52d09d8568d6cbf5f5fc35f51b6a2c858db8
+          ref: ${{ steps.core.outputs.ref }}
           path: at
-          submodules: recursive
+      - run: git -C at submodule update --init --depth 1 deepseek-harness
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install -e ./harness
-      - run: make -C harness test AT_SOURCE=${{ github.workspace }}/at
-      - run: bash -n harness/scripts/entrypoint.sh
-      - name: Test the actual container Python and transport assets
+      - name: Run normal Harness tests
+        env:
+          AT_SOURCE: ${{ github.workspace }}/at
+          PYTHONPATH: ${{ github.workspace }}/at/shared/lib:${{ github.workspace }}/at/deepseek-harness/scripts
         run: |
-          docker build --build-context at=./at -t codex-harness-test ./harness
-          docker run --rm --entrypoint agt codex-harness-test worker report-ready --help
-          docker run --rm --entrypoint /opt/venv/bin/python3 \
-            -e AT_SOURCE=/opt/agentteams/transport \
-            -v "${{ github.workspace }}/harness/tests:/tests:ro" \
-            codex-harness-test -m unittest discover -s /tests -v
-          docker run --rm --entrypoint /opt/venv/bin/python3 -v "${{ github.workspace }}/harness/tests:/tests:ro" \
-            codex-harness-test /tests/native_input_smoke.py
-          for decision in allow deny; do
-            docker run --rm --network none --entrypoint /opt/venv/bin/python3 -v "${{ github.workspace }}/harness/tests:/tests:ro" \
-              codex-harness-test /tests/native_tool_smoke.py "$decision"
-          done
-      - name: Verify native stop and supplement against App Server
-        run: make -C harness direct-control-smoke IMAGE=codex-harness-test VERSION=latest
+          python -m pip install -e ./harness 'pytest>=8,<9'
+          python -m pytest harness/tests -q -p no:cacheprovider
+          bash -n harness/scripts/entrypoint.sh
+      - uses: docker/setup-buildx-action@v3
+      - name: Build frozen native SDK with one compiler job
+        working-directory: harness
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('Dockerfile').read_text()
+          old = 'CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 cargo build --locked --release -p codex-app-server --bin codex-app-server'
+          assert text.count(old) == 1
+          text = text.replace('clang cmake pkg-config libssl-dev', 'clang lld cmake pkg-config libssl-dev')
+          text = text.replace(old, 'CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_DEBUG=0 cargo rustc --locked --release -p codex-app-server --bin codex-app-server -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,--threads=2')
+          Path('.native-artifact.Dockerfile').write_text(text)
+          PY
+          docker buildx build --load --platform linux/arm64 --target native-sdk -f .native-artifact.Dockerfile -t codex-native-artifact:local .
+      - name: Export exact binary and provenance
+        run: |
+          mkdir artifact
+          container=$(docker create codex-native-artifact:local)
+          trap 'docker rm "$container" >/dev/null' EXIT
+          docker cp "$container:/usr/local/bin/codex-app-server" artifact/codex-app-server
+          git -C harness rev-parse HEAD > artifact/harness.sha
+          git -C at rev-parse HEAD > artifact/core.sha
+          git -C at submodule status deepseek-harness > artifact/transport.sha
+          docker run --rm --entrypoint sh codex-native-artifact:local -c 'git -C /build/codex rev-parse HEAD; rustc -Vv; dpkg-query -W; ldd /usr/local/bin/codex-app-server' > artifact/build-dependencies.txt
+          docker inspect --format '{{.Id}} {{.Os}}/{{.Architecture}}' codex-native-artifact:local > artifact/image.txt
+          sha256sum harness/patches/codex-durable-user-input.patch harness/.native-artifact.Dockerfile > artifact/build-inputs.sha256
+          (cd artifact && sha256sum codex-app-server > SHA256SUMS)
+          file artifact/codex-app-server
+          df -h
+      - name: Verify actual App Server native Task and admission boundaries
+        env:
+          AT_SOURCE: ${{ github.workspace }}/at
+          PYTHONPATH: ${{ github.workspace }}/harness/src:${{ github.workspace }}/at/shared/lib:${{ github.workspace }}/at/deepseek-harness/scripts
+          CODEX_NATIVE_COMMAND: '["${{ github.workspace }}/artifact/codex-app-server"]'
+          CODEX_NATIVE_REFRESH_FIXTURE: 'true'
+          CODEX_NATIVE_TRACE_EVIDENCE: ${{ github.workspace }}/artifact/native-sdk-otel.json
+        run: |
+          python harness/tests/native_task_protocol_smoke.py > artifact/native-task.log 2>&1
+          python harness/tests/native_admission_smoke.py > artifact/native-admission.log 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: codex-native-arm64-test-binary
+          path: artifact/
+          retention-days: 3
+          if-no-files-found: warn
