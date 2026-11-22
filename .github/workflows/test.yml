@@ -39,5 +39,10 @@ jobs:
             docker run --rm --network none --entrypoint /opt/venv/bin/python3 -v "${{ github.workspace }}/harness/tests:/tests:ro" \
               codex-harness-test /tests/native_tool_smoke.py "$decision"
           done
+      - name: Verify packaged workspace-write shell isolation
+        run: |
+          docker run --rm --network none --security-opt seccomp=unconfined --entrypoint /opt/venv/bin/python3 \
+            -v "${{ github.workspace }}/harness/tests:/tests:ro" \
+            codex-harness-test /tests/native_tool_smoke.py allow workspace-write
       - name: Verify native stop and supplement against App Server
         run: make -C harness direct-control-smoke IMAGE=codex-harness-test VERSION=latest
