@@ -52,7 +52,8 @@ jobs:
           old = 'CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 cargo build --locked --release -p codex-app-server --bin codex-app-server'
           assert text.count(old) == 1
           text = text.replace('clang cmake pkg-config libssl-dev', 'clang lld cmake pkg-config libssl-dev')
-          text = text.replace(old, 'CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_DEBUG=0 cargo rustc --locked --release -p codex-app-server --bin codex-app-server -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,--threads=2')
+          text = text.replace(old, 'CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_SMALL_DEBUG=0 cargo rustc --locked --profile dev-small -p codex-app-server --bin codex-app-server -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,--threads=2')
+          text = text.replace('cp target/release/codex-app-server', 'cp target/dev-small/codex-app-server')
           Path('.native-artifact.Dockerfile').write_text(text)
           PY
           docker buildx build --load --platform linux/arm64 --target native-sdk -f .native-artifact.Dockerfile -t codex-native-artifact:local .
@@ -63,6 +64,8 @@ jobs:
           trap 'docker rm "$container" >/dev/null' EXIT
           docker cp "$container:/usr/local/bin/codex-app-server" artifact/codex-app-server
           git -C harness rev-parse HEAD > artifact/harness.sha
+          printf '%s\n' d78be1a88d7e4a1766f4952c8d6c8cb59135a58c > artifact/runtime.sha
+          printf '%s\n' 'dev-small: opt-level=0, debug=none; validation artifact, not a production release performance claim' > artifact/build-profile.txt
           git -C at rev-parse HEAD > artifact/core.sha
           git -C at submodule status deepseek-harness > artifact/transport.sha
           docker run --rm --entrypoint sh codex-native-artifact:local -c 'git -C /build/codex rev-parse HEAD; rustc -Vv; dpkg-query -W; ldd /usr/local/bin/codex-app-server' > artifact/build-dependencies.txt
