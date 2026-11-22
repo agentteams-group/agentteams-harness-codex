@@ -77,3 +77,14 @@ def test_wrong_tool_id_cannot_finish_started_operation():
     with patch('task_recovery_rpc.execute', side_effect=execute):
         with pytest.raises(RecoveryConflict):
             tool_hook.scoped_tool(frame(), hook('PostToolUse', 'Bash'))
+
+
+def test_private_callback_blocked_outcome_survives_scope_restore(tmp_path, monkeypatch):
+    scope = admission.Scope(tmp_path/'.codex', tmp_path/'plugin', frame()['context'])
+    monkeypatch.setenv(admission.ENV, str(scope.path))
+    admission.mark_blocked(True)
+    restored = admission.Scope(tmp_path/'.codex', tmp_path/'plugin', frame()['context'])
+    with pytest.raises(RuntimeError, match='admission blocked'):
+        restored.require_admitted()
+    admission.mark_blocked(False)
+    restored.require_admitted()

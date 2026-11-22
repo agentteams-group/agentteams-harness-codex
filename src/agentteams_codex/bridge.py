@@ -899,6 +899,7 @@ class Bridge:
                         and params.get("turn", {}).get("id") == turn["id"]
                     ):
                         terminal = params["turn"]
+                        native_scope.require_admitted()
                         trace_event("inference.end", event_id=event["event_id"], status=terminal.get("status"), error=terminal.get("error"), layer="agent_turn")
                         if terminal["status"] == "completed":
                             return (

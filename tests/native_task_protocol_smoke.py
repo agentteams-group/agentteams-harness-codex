@@ -230,7 +230,9 @@ def main():
             assert not forbidden.intersection(attribute['key'] for attribute in attributes)
             assert any(attribute['key'] == 'gen_ai.usage.input_tokens' for attribute in attributes)
             assert any(span['name'] == 'mcp.tools.call' for span in spans)
-            native_turns = [span for span in spans if span['name'] == 'session_task.turn']
+            # Both are native task execution boundaries. The long-lived outer turn
+            # can remain open until session cleanup; its child run ends with the task.
+            native_turns = [span for span in spans if span['name'] in {'session_task.turn', 'session_task.run'}]
             assert native_turns
             assert all(span['traceId'] == '123456789012345678901234567890ab' for span in native_turns), 'SDK lost the trusted incoming trace carrier'
             if REFRESH:

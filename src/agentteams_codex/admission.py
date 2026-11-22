@@ -47,8 +47,15 @@ class Scope:
             prior = json.loads(self.path.read_text()) if self.path.exists() else {}
             self.frame = {'context': context, 'plugin': str(plugin), 'recovery': recovery,
                           'registrations': {'mcp__teamharness__task': REGISTRATION},
-                          'observed': prior.get('observed', {})}
+                          'observed': prior.get('observed', {}),
+                          'blocked': prior.get('blocked', False)}
             write(self.path, self.frame)
+
+    def require_admitted(self):
+        # The pinned SDK reports unexpected task errors as TurnComplete. Use
+        # only the private framework callback outcome, never the model text.
+        if json.loads(self.path.read_text()).get('blocked'):
+            raise RuntimeError('Native framework admission blocked: authoritative verification required')
 
     def update(self, context):
         with locked(self.path):
@@ -112,6 +119,14 @@ def phase_complete(outcome, context):
         write(path, frame)
 
 
+def mark_blocked(blocked):
+    path = Path(os.environ[ENV])
+    with locked(path):
+        frame = json.loads(path.read_text())
+        frame['blocked'] = blocked
+        write(path, frame)
+
+
 def main():
     from .native_input import checkpoint_rows_present, saved_message
     request = json.load(sys.stdin)
@@ -138,6 +153,7 @@ def main():
         prefix = os.getenv('AGENTTEAMS_STORAGE_PREFIX')
         if prefix:
             mc('cp', str(archive), f"{prefix}/agents/{os.environ['AGENTTEAMS_WORKER_NAME']}/runtime/{archive.name}")
+        mark_blocked(False)
         print(json.dumps({'ok': True}))
         return
     complete = frame.get('complete')
@@ -153,6 +169,7 @@ def main():
               if not checkpoint_rows_present(home, frame['observed'].get(receipt['receiptId'], {}).get('threadId'),
                   frame['observed'].get(receipt['receiptId'], {}).get('rows'))],
               **({'complete': result['complete']} if result.get('complete') else {})}
+    mark_blocked(False)
     print(json.dumps(result, ensure_ascii=False))
 
 
@@ -160,6 +177,7 @@ if __name__ == '__main__':
     try:
         main()
     except Exception:
+        mark_blocked(True)
         # This callback carries metadata only; never print API bodies or source
         # content into telemetry/model context when admission fails.
         print(json.dumps({'ok': False, 'error': 'native_admission_requires_verification'}))
