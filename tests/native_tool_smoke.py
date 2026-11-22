@@ -58,7 +58,7 @@ with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
     Model.marker = work / "effect"
     sandbox = sys.argv[2] if len(sys.argv) > 2 else "danger-full-access"
     assert sandbox in {"workspace-write", "danger-full-access"}
-    outside = root / "outside-workspace"
+    outside = Path("/opt/agentteams") / f"native-shell-fixture-{root.name}"
     Model.tool_command = f"echo confirmed > {Model.marker}"
     if sandbox == "workspace-write":
         Model.tool_command += f" && ! touch {outside}"
