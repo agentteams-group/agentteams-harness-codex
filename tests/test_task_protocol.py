@@ -229,3 +229,43 @@ def test_native_mcp_and_parent_prepare_use_the_same_configured_task_storage(tmp_
         prepare(config, tmp_path / '.codex', tmp_path / 'work', plugin)
     native = tomllib.loads((tmp_path / '.codex/config.toml').read_text())
     assert native['mcp_servers']['teamharness']['env']['TEAMHARNESS_SHARED_DIR'] == shared
+
+
+def test_coordination_admission_sends_the_raw_matrix_id_over_http(tmp_path, monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    source = Path(os.environ['AT_SOURCE']).resolve()
+    phase = task_protocol.common(source / 'plugins/teamharness', 'phase_recovery')
+    received = []
+    class Admission(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            received.append(body)
+            valid = body['native_event_id'] == '$native-contract'
+            self.send_response(200 if valid else 400)
+            self.end_headers()
+            self.wfile.write(json.dumps({'active': valid}).encode())
+        def log_message(self, *_):
+            pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Admission)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    token = tmp_path / 'token'; token.write_text('own-fixture-token')
+    monkeypatch.setenv('AGENTTEAMS_CONTROLLER_URL', f'http://127.0.0.1:{server.server_port}')
+    monkeypatch.setenv('AGENTTEAMS_AUTH_TOKEN_FILE', str(token))
+    monkeypatch.setenv('AGENTTEAMS_PROCESS_ID', 'own-fixture-process')
+    monkeypatch.setenv('no_proxy', '127.0.0.1')
+    modules = {'task_receipt': SimpleNamespace(), 'task_cli': SimpleNamespace(run=Mock()),
+               'phase_recovery': phase, 'task_context': SimpleNamespace(prepare_event=Mock(return_value={
+                   'execution': 'exec-one', 'context': {}}))}
+    event = {'event_id': '$native-contract', 'room_id': '!own:test', 'sender': '@leader:test',
+             '_task_protocol_meta': {'teamharness_coordination': {
+                 'id': '1' * 32, 'kind': 'task_assigned', 'task_id': 'exec-one'}}}
+    try:
+        with patch.object(task_protocol, 'common', side_effect=lambda _, name: modules[name]):
+            context, _, _ = task_protocol.prepare_turn(tmp_path, 'worker', event)
+        assert context['execution'] == 'exec-one'
+        assert received == [{'action': 'begin', 'native_event_id': '$native-contract',
+                             'process_id': 'own-fixture-process'}]
+    finally:
+        server.shutdown(); server.server_close(); thread.join()
