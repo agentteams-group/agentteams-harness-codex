@@ -21,7 +21,7 @@ jobs:
           test "$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR==2 {print $4}')" -ge 14680064
       - uses: actions/checkout@v4
         with:
-          ref: 084cc70aea0ab5c52817370c0529dd09ddfee225
+          ref: 92272fddba82a1be4fc0bd35970eddbb61dec8c9
           path: harness
       - uses: actions/checkout@v4
         with:
@@ -70,7 +70,7 @@ jobs:
           Path('harness/.formal-artifact.Dockerfile').write_text(derived)
           Path('artifact/source.Dockerfile').write_text(source)
           Path('artifact/candidate.Dockerfile').write_text(derived)
-          Path('artifact/provenance.json').write_text(json.dumps({'runtimeCommit':'084cc70aea0ab5c52817370c0529dd09ddfee225','coreCommit':'663615d7e5d5a85887999b75b510347a1edfdbcc','controllerEquivalentSourceCommit':'204a42e8cb4fc963a6961872e3d32e9722b0f45f','nativeArtifactRun':44981563905,'nativeBinarySha256':'e47caa99cd7f65b874352d97e80d8a32b2200e7ec615aa59ab9e7009495b3338','sdkSource':'rust-v0.143.0/c4d748f586a84a3ed5b6aceb82e9a1db4abb1cda plus frozen4f07395 patch','sdkArtifactProfile':'dev-small opt-level0 debugnone; no release performance claim','productionSDKProfile':'release; unchanged production Dockerfile','finalStageByteEquivalent':True,'sourceDockerfileSha256':hashlib.sha256(source.encode()).hexdigest(),'candidateDockerfileSha256':hashlib.sha256(derived.encode()).hexdigest(),'publishing':False},indent=2)+'\n')
+          Path('artifact/provenance.json').write_text(json.dumps({'runtimeCommit':'92272fddba82a1be4fc0bd35970eddbb61dec8c9','coreCommit':'663615d7e5d5a85887999b75b510347a1edfdbcc','controllerEquivalentSourceCommit':'204a42e8cb4fc963a6961872e3d32e9722b0f45f','nativeArtifactRun':44981563905,'nativeBinarySha256':'e47caa99cd7f65b874352d97e80d8a32b2200e7ec615aa59ab9e7009495b3338','sdkSource':'rust-v0.143.0/c4d748f586a84a3ed5b6aceb82e9a1db4abb1cda plus frozen4f07395 patch','sdkArtifactProfile':'dev-small opt-level0 debugnone; no release performance claim','productionSDKProfile':'release; unchanged production Dockerfile','finalStageByteEquivalent':True,'sourceDockerfileSha256':hashlib.sha256(source.encode()).hexdigest(),'candidateDockerfileSha256':hashlib.sha256(derived.encode()).hexdigest(),'publishing':False},indent=2)+'\n')
           PY
       - uses: docker/setup-buildx-action@v3
       - name: Build formal final stage without SDK recompile or publishing
@@ -84,10 +84,10 @@ jobs:
           for fixture in native_task_protocol_smoke native_admission_smoke; do
             docker run --rm --network none --user "$(id -u):$(id -g)" --entrypoint /opt/venv/bin/python -v "$GITHUB_WORKSPACE/harness/tests:/tests:ro" -v "$GITHUB_WORKSPACE/at:/core:ro" -v "$GITHUB_WORKSPACE/artifact:/evidence" -e AT_SOURCE=/core -e 'CODEX_NATIVE_COMMAND=["/usr/local/bin/codex-app-server"]' -e CODEX_NATIVE_REFRESH_FIXTURE=false -e "CODEX_NATIVE_TRACE_EVIDENCE=/evidence/$fixture-otel.json" codex-formal-candidate:local "/tests/$fixture.py" > "artifact/$fixture.log" 2>&1
           done
-      - name: Verify native direct steering and stop in the candidate image
+      - name: Verify authenticated Worker and Leader native steering in the candidate image
         run: |
-          for action in steer stop; do
-            docker run --rm --network none --entrypoint /opt/venv/bin/python -v "$GITHUB_WORKSPACE/harness/tests:/tests:ro" -v "$GITHUB_WORKSPACE/at:/core:ro" -e AT_SOURCE=/core codex-formal-candidate:local /tests/direct_control_smoke.py "$action" > "artifact/native-direct-$action.log" 2>&1
+          for role in worker leader; do
+            docker run --rm --network none --entrypoint /opt/venv/bin/python -v "$GITHUB_WORKSPACE/harness/tests:/tests:ro" -v "$GITHUB_WORKSPACE/at:/core:ro" -e AT_SOURCE=/core codex-formal-candidate:local /tests/direct_control_smoke.py steer "$role" > "artifact/native-direct-steer-$role.log" 2>&1
           done
       - name: Export candidate archive and exact provenance
         run: |
