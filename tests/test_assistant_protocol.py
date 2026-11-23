@@ -17,6 +17,17 @@ from agentteams_codex.task_protocol import prepare_turn
 
 
 class AssistantProtocolTest(TestCase):
+    def test_background_tool_progress_is_silent_and_approval_is_visible(self):
+        from agentteams_codex.bridge import Bridge
+        bridge = Bridge.__new__(Bridge)
+        bridge.matrix = Mock()
+        event = {'room_id': '!assistant:test', 'event_id': '$assistant',
+            '_task_protocol_meta': {'teamharness_coordination': {'kind': 'assistant_digest'}}}
+        bridge.reply(event, 'Codex is working: commandExecution.', 'progress')
+        bridge.matrix.send_text.assert_not_called()
+        bridge.reply(event, 'Approve?', 'approval', approval={'request_id': 'one'})
+        bridge.matrix.send_content.assert_called_once()
+
     def test_saved_native_reply_is_not_sent_for_background_assistant(self):
         from agentteams_codex.bridge import Bridge
         from unittest.mock import patch

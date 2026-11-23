@@ -364,6 +364,8 @@ class Bridge:
         self.journal.save()
 
     def reply(self, event, text, suffix, approval=None):
+        if not approval and (event.get('_task_protocol_meta') or {}).get('teamharness_coordination', {}).get('kind') == 'assistant_digest':
+            return None
         if approval:
             return self.matrix.send_content(
                 event["room_id"],
