@@ -1,4 +1,4 @@
-# Codex Teams 助手提醒（Draft）
+# Codex Teams 助手提醒（主线预览）
 
 Refs https://github.com/agentscope-ai/AgentTeams/issues/1683
 
@@ -14,4 +14,4 @@ AT_SOURCE=<Core-checkout> make test
 
 镜像还必须使用包含 `agt assistant context/receipt/send` 的匹配 Controller/CLI；仅更新公共源码 pin 并不升级旧镜像中的 CLI。现有发布镜像不能据此宣称已启用新能力。完整模型执行、发送结果和 Dashboard 通知需在任务协议最终版本上联合认证。
 
-保持 Draft，暂不合并、不自动合并或发布。等待任务协议重构完成后统一 rebase、核对 Core pin 和 Controller 镜像，再做联合回归。
+部署前核对锁定的公共 Core、Controller／CLI 和 Harness 镜像是否匹配。实跑证据及未覆盖场景见总 Issue；源码合并不代表已发布。
