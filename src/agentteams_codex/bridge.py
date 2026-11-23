@@ -1016,6 +1016,11 @@ class Bridge:
             record.update(answer=answer, outputs=outputs, status="answer_ready")
             self.journal.save()
         restore_output_paths(self.name, self.workspace, record["outputs"])
+        if (event.get("_task_protocol_meta") or {}).get("teamharness_coordination", {}).get("kind") == "assistant_digest":
+            # Controller's sent/skipped receipt is the only user-facing outcome.
+            record["status"] = "completed"
+            self.journal.save()
+            return
         source = source_agent_reply_user_id(event, self.agent_ids, self.user_id)
         message_id = self.matrix.send_text(
             event["room_id"],

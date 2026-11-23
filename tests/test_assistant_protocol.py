@@ -17,11 +17,35 @@ from agentteams_codex.task_protocol import prepare_turn
 
 
 class AssistantProtocolTest(TestCase):
+    def test_saved_native_reply_is_not_sent_for_background_assistant(self):
+        from agentteams_codex.bridge import Bridge
+        from unittest.mock import patch
+        bridge = Bridge.__new__(Bridge)
+        bridge.workspace, bridge.name = core, "leader"
+        bridge.matrix, bridge.journal = Mock(), Mock()
+        record = {"event":{"event_id":"$assistant","room_id":"!assistant:test","_task_protocol_meta":{"teamharness_coordination":{"kind":"assistant_digest"}}},"answer":"No new updates","outputs":[]}
+        with patch("agentteams_codex.bridge.restore_output_paths"):
+            bridge.process("$assistant",record)
+        self.assertEqual(record["status"],"completed")
+        bridge.matrix.send_text.assert_not_called()
+
+    def test_managed_saved_reply_is_closed_without_native_delivery(self):
+        managed = ManagedMatrix.__new__(ManagedMatrix)
+        managed.matrix, managed.bridge = Mock(), Mock()
+        managed.matrix.message.return_value={"recovery":"deliver"}
+        managed.matrix.message_claim.return_value={"recovery":"deliver","identity":{"event_key":"assistant"}}
+        record={"event":{"shared_key":"assistant","_task_protocol_meta":{"teamharness_coordination":{"kind":"assistant_digest"}}}}
+        managed.message_turn(record)
+        managed.matrix.message_cancel.assert_called_once_with({"event_key":"assistant"})
+        managed.matrix.message_delivered.assert_not_called()
+        self.assertEqual(record["status"],"completed")
+
     def test_assistant_preparation_does_not_enter_business_task_phase(self):
         with AssistantFixture() as f:
             from unittest.mock import patch
             with patch("agentteams_codex.task_protocol.asyncio.run", side_effect=AssertionError("assistant entered Task phase")):
-                context, _fact, cwd = prepare_turn(core / "plugins/teamharness", "leader", {
+                plugin = Path(os.environ.get("AGENTTEAMS_PLUGIN_DIR", core / "plugins/teamharness"))
+                context, _fact, cwd = prepare_turn(plugin, "leader", {
                     "event_id": "$assistant", "room_id": f.room, "sender": f.own,
                     "_task_protocol_meta": f.control["channel_meta"],
                 })
