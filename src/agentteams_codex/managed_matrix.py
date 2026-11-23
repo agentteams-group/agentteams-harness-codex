@@ -287,6 +287,13 @@ class ManagedMatrix:
                 self.bridge.journal.save()
             answer = self.bridge.run_turn(current, record)
             self.bridge.persist_codex()
+            if record.get("stopped"):
+                matrix.message_cancel(identity)
+                record["status"] = "completed"
+                self.bridge.journal.save()
+                if record.get("direct"):
+                    self.bridge.execution_status(event, "stopped")
+                return
             outputs = changed_outbox_files(self.bridge.workspace, record["outbox_before"])
             claim = self.save_outputs(identity, event, answer, outputs)
         if claim["recovery"] != "deliver":

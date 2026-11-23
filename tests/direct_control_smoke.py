@@ -13,6 +13,7 @@ import sys
 from http.server import ThreadingHTTPServer
 from io import BytesIO
 from urllib.error import HTTPError
+from urllib.parse import unquote, urlsplit
 from unittest.mock import Mock, patch
 
 from agentteams_codex.bridge import Bridge, Journal
@@ -54,7 +55,7 @@ with tempfile.TemporaryDirectory() as temporary:
     bridge = Bridge.__new__(Bridge)
     bridge.name, bridge.user_id = 'agent', '@agent:test'
     bridge.home, bridge.workspace = home, workspace
-    bridge.plugin = Path(os.environ.get('AT_SOURCE', '/opt/agentteams/transport')) / 'plugins/teamharness'
+    bridge.plugin = Path(os.environ.get('AGENTTEAMS_PLUGIN_DIR', '/opt/agentteams/plugins/teamharness'))
     bridge.runtime_path = root / 'runtime.yaml'
     bridge.runtime_path.write_text(json.dumps({'apiVersion': 'agentteams.io/v1beta1', 'kind': 'MemberRuntimeConfig',
         'member': {'runtime': 'codex', 'runtimeName': 'agent', 'role': role,
@@ -69,7 +70,8 @@ with tempfile.TemporaryDirectory() as temporary:
     bridge.matrix = Mock()
     def matrix_request(method, path, *args):
         if '/context/' in path:
-            return {'event': {'event_id': '$original'}, 'events_before': []}
+            event_id = unquote(urlsplit(path).path.rsplit('/', 1)[-1])
+            return {'event': {'event_id': event_id}, 'events_before': []}
         if '/state/m.room.encryption/' in path:
             raise HTTPError(path, 404, 'Absent', {}, BytesIO(b'{"errcode":"M_NOT_FOUND"}'))
         if path.endswith('/account/whoami'):
@@ -121,8 +123,13 @@ with tempfile.TemporaryDirectory() as temporary:
             assert not errors, errors
             assert controller.claims == ['$original', '$supplement'], controller.claims
             assert controller.saved_sessions, 'No actual native session checkpoint was published'
-            cp = controller.inputs[event['shared_key']]['execution']['checkpoint']
-            assert cp['delivery'] == 'delivered', cp
+            execution = controller.inputs[event['shared_key']]['execution']
+            cp = execution['checkpoint']
+            if action == 'stop':
+                assert execution['state'] == 'cancelled' and not cp.get('result'), execution
+                assert bridge.journal.data['events']['$original']['status'] == 'completed'
+            else:
+                assert cp['delivery'] == 'delivered', cp
             pid = int(Model.pidfile.read_text())
             try:
                 os.kill(pid, 0)
