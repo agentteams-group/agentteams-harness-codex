@@ -65,7 +65,7 @@ class StateTests(unittest.TestCase):
                           "execution_control": {"action": "steer"}}
             bridge.journal.ingest([event, supplement], "cursor")
             bridge.controls.put((supplement, "/steer", "additional input", "thread-1", "turn-1"))
-            with patch("agentteams_codex.bridge.prepare", return_value=("model", "instructions")), patch("agentteams_codex.bridge.Client") as factory:
+            with patch("agentteams_codex.bridge.prepare", return_value=("model", "instructions")), patch("agentteams_codex.bridge.prepare_turn", return_value=({'role': 'worker', 'sources': [], 'sourceEvent': '$request'}, '', None)), patch("agentteams_codex.bridge.Client") as factory:
                 client = factory.return_value.__enter__.return_value
                 client.open_thread.return_value = {"id": "thread-1", "turns": []}
                 client.start.return_value = {"id": "turn-1"}
@@ -95,7 +95,7 @@ class StateTests(unittest.TestCase):
                 self.assertTrue(bridge.handle_control({**event, "event_id": f"$supplement-{index}",
                     "body": f"additional {index}", "execution_control": {
                         "action": "steer", "agent_id": bridge.user_id, "run_id": "$original"}}))
-            with patch("agentteams_codex.bridge.prepare", return_value=("model", "instructions")), patch("agentteams_codex.bridge.Client") as factory:
+            with patch("agentteams_codex.bridge.prepare", return_value=("model", "instructions")), patch("agentteams_codex.bridge.prepare_turn", return_value=({'role': 'worker', 'sources': [], 'sourceEvent': '$request'}, '', None)), patch("agentteams_codex.bridge.Client") as factory:
                 client = factory.return_value.__enter__.return_value
                 client.open_thread.return_value = {"id": "thread-1", "turns": []}
                 client.start.return_value = {"id": "turn-1"}

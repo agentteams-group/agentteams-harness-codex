@@ -10,6 +10,7 @@ import shutil
 import signal
 import sqlite3
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -18,10 +19,14 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .client import Client, CodexError, completed_answer
-from .native_input import rollout_digest
+from .native_input import rollout_digest, checkpoint_rows_present
+from .input_barrier import InputBarrier, ENV as BARRIER_ENV
+from .admission import Scope as NativeScope, ENV as SCOPE_ENV, COMMAND_ENV as ADMISSION_COMMAND_ENV
 from .managed_matrix import ManagedMatrix
-from .tool_hook import confirm_native_tool, require_hooks
-from .config import managed_worker, prepare, read_runtime, sync_assigned_skills
+from .tool_hook import require_hooks
+from .config import managed_worker, prepare, read_runtime, sync_assigned_skills, _role
+from .task_protocol import CONTEXT_ENV, prepare_turn, delivery_context, common
+from .native_telemetry import trace_attributes
 try:
     from runtime_observability import event as trace_event
 except ImportError:
@@ -115,8 +120,16 @@ class Journal:
     def save(self):
         with self.lock:
             temporary = self.path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(self.data, ensure_ascii=False) + "\n")
+            with temporary.open("w") as stream:
+                stream.write(json.dumps(self.data, ensure_ascii=False) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
             temporary.replace(self.path)
+            directory = os.open(self.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
             prefix = os.getenv("AGENTTEAMS_STORAGE_PREFIX")
             if prefix:
                 mc(
@@ -272,6 +285,10 @@ class Bridge:
                      "coordination_session": "recovery:" + key,
                      "recovery": {"task_id": task_id, "team_id": team, "thread_id": None, "spec": claimed["spec"],
                                   **{k: execution[k] for k in ("instance_id", "generation", "process_id")}}}
+            if task.get("task_plan_id"):
+                event["_task_protocol_meta"] = {"teamharness_coordination": {
+                    "kind": "task_assigned", "task_id": task_id, "main_task_id": task.get("main_task_id", ""),
+                    "project_id": task.get("project_id", ""), "delivery_id": task.get("notifyTxn")}}
             # Supersede only the same Task's local admission. Other Matrix
             # backlog stays queued and its cursor is never reset.
             for old_id, old in list(self.journal.data["events"].items()):
@@ -324,6 +341,11 @@ class Bridge:
         if prefix:
             mc("cp", str(path), f"{prefix}/agents/{self.name}/runtime/{path.name}")
 
+    def checkpoint_refreshed_input(self, record, frame):
+        self.persist_codex(include_workspace=False)
+        record["native_task_context"] = frame
+        self.journal.save()
+
     def checkpoint_input(self, client, thread_id, turn_id, record):
         if record.get("input_checkpointed"):
             return
@@ -335,6 +357,10 @@ class Bridge:
         except (CodexError, OSError, subprocess.SubprocessError, KeyError):
             return
         record["input_checkpointed"] = True
+        acknowledgements = record.pop("delivery_context_ack", {})
+        if acknowledgements:
+            common(self.plugin, "task_receipt").ack_delivery_context(
+                self.journal.data.setdefault("task_delivery_context", {}), acknowledgements)
         self.journal.save()
 
     def reply(self, event, text, suffix, approval=None):
@@ -553,7 +579,23 @@ class Bridge:
     def run_turn(self, event, record):
         trace_event("turn.begin", room_id=event["room_id"], event_id=event["event_id"])
         config = read_runtime(self.runtime_path)
-        model, instructions = prepare(config, self.home, self.workspace, self.plugin)
+        task_context, task_facts, task_output = prepare_turn(self.plugin, _role(config), event)
+        saved = record.get("native_task_context") or {}
+        if (saved.get("sourceEvent") == event["event_id"]
+                and checkpoint_rows_present(self.home, saved.get("threadId"), saved.get("rows"))):
+            task_context.update(sources=saved["sources"], inputRefreshPending=False)
+            task_facts += "\n[Task input references]\n" + json.dumps([
+                {key: source[key] for key in ("inputId", "eventId")} for source in saved["sources"]])
+        model, instructions = prepare(config, self.home, self.workspace, self.plugin,
+            trace_attributes=trace_attributes(config, event, task_context), task_scope=task_context)
+        if task_facts:
+            instructions += "\n\n" + task_facts
+        delivered, acknowledgements = delivery_context(self.plugin, _role(config), event["room_id"],
+            self.journal.data.setdefault("task_delivery_context", {}))
+        if delivered:
+            instructions += "\n\n" + delivered
+            record["delivery_context_ack"] = acknowledgements
+        working_directory = task_output or self.workspace
         credential = os.getenv("AGENTTEAMS_WORKER_GATEWAY_KEY") or config.get(
             "desired", {}
         ).get("model", {}).get("gatewayKey", "")
@@ -561,7 +603,16 @@ class Bridge:
             **os.environ,
             "CODEX_GATEWAY_KEY": (config["desired"]["model"]["gatewayKey"] if managed_worker()
                                   else os.getenv("CODEX_GATEWAY_KEY") or credential),
+            CONTEXT_ENV: json.dumps(task_context, ensure_ascii=False, default=str),
         }
+        native_scope = NativeScope(self.home, self.plugin, task_context,
+            {'kind': 'task', 'identity': event['recovery']} if event.get('recovery') else
+            {'kind': 'message', 'identity': event['message_execution']} if event.get('message_execution') else None)
+        scratch = Path((task_context.get('context') or {}).get('scratchDirectory') or self.workspace / '.scratch')
+        scratch.mkdir(parents=True, exist_ok=True)
+        environment.update({SCOPE_ENV: str(native_scope.path),
+                            ADMISSION_COMMAND_ENV: json.dumps([sys.executable, '-m', 'agentteams_codex.admission']),
+                            'TMPDIR': str(scratch)})
         thread_id = self.journal.data["rooms"].get(event.get("coordination_session", event["room_id"]))
         if event.get("recovery"):
             thread_id = event["recovery"].get("thread_id")
@@ -585,17 +636,18 @@ class Bridge:
             if event["kind"] == "image":
                 image = attachment
         trace_event("inference.begin", model=model, room_id=event["room_id"], event_id=event["event_id"], layer="agent_turn")
-        with Client(self.workspace, env=environment) as client:
-            if event.get("message_execution"):
-                require_hooks(client, self.workspace)
+        with InputBarrier() as input_barrier, Client(working_directory, env={**environment, BARRIER_ENV: input_barrier.path},
+                trace_context=(event.get("_task_protocol_meta") or {}).get("otel_carrier")) as client:
+            if event.get("message_execution") or event.get("recovery") or any(task_context.get(key) for key in ("planning", "review", "completion")):
+                require_hooks(client, working_directory)
             try:
-                thread = client.open_thread(thread_id, self.workspace, model, instructions)
+                thread = client.open_thread(thread_id, working_directory, model, instructions)
             except CodexError:
                 if not (event.get("recovery") or event.get("message_execution")) or not thread_id:
                     raise
                 # A matching marker is insufficient when the native archive
                 # was lost or the SDK has expired the session.
-                thread = client.open_thread(None, self.workspace, model, instructions)
+                thread = client.open_thread(None, working_directory, model, instructions)
             thread_id = thread["id"]
             self.journal.data["rooms"][event.get("coordination_session", event["room_id"])] = thread_id
             record["thread_id"] = thread_id
@@ -638,6 +690,9 @@ class Bridge:
             last_progress = {}
             try:
                 while not self.stop.is_set():
+                    input_barrier.serve(client, thread_id, turn["id"],
+                        lambda frame: self.checkpoint_refreshed_input(record, frame),
+                        context=task_context, home=self.home)
                     self.checkpoint_input(client, thread_id, turn["id"], record)
                     if time.monotonic() > deadline:
                         client.control("turn/interrupt", thread_id, turn["id"])
@@ -652,7 +707,7 @@ class Bridge:
                                     "The requested Codex turn has already ended"
                                 )
                             if source.get("control_execution"):
-                                self.managed.commit_for_turn(client, thread_id, source)
+                                self.managed.commit_for_turn(client, thread_id, source, active_turn_id=turn["id"])
                             if verb in {"/cancel", "/redirect"}:
                                 client.control("turn/interrupt", thread_id, turn["id"])
                                 if direct and source.get("execution_control"):
@@ -749,8 +804,6 @@ class Bridge:
                     method, params = message.get("method", ""), message.get(
                         "params", {}
                     )
-                    if event.get("message_execution") and method == "item/completed":
-                        confirm_native_tool(self.managed.matrix, event["message_execution"], params.get("item") or {})
                     if "id" in message and method:
                         if method == "item/permissions/requestApproval":
                             client.send(
@@ -852,6 +905,7 @@ class Bridge:
                         and params.get("turn", {}).get("id") == turn["id"]
                     ):
                         terminal = params["turn"]
+                        native_scope.require_admitted()
                         trace_event("inference.end", event_id=event["event_id"], status=terminal.get("status"), error=terminal.get("error"), layer="agent_turn")
                         if terminal["status"] == "completed":
                             return (

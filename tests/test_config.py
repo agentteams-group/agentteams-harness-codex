@@ -168,7 +168,7 @@ class ConfigTests(unittest.TestCase):
         self.assertNotIn("/opt/agentteams/scripts/lib", raw)
         self.assertNotIn("test-only-token", raw)
         self.assertEqual(
-            config["env"]["TEAMHARNESS_SHARED_DIR"], str(self.root / "workspace/shared")
+            config["env"]["TEAMHARNESS_SHARED_DIR"], str(self.root / "shared")
         )
 
     def test_unsupported_package_and_sse_fail_explicitly(self):

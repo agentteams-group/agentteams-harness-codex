@@ -56,7 +56,12 @@ with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
     home.mkdir()
     work.mkdir()
     Model.marker = work / "effect"
+    sandbox = sys.argv[2] if len(sys.argv) > 2 else "danger-full-access"
+    assert sandbox in {"workspace-write", "danger-full-access"}
+    outside = Path("/opt/agentteams") / f"native-shell-fixture-{root.name}"
     Model.tool_command = f"echo confirmed > {Model.marker}"
+    if sandbox == "workspace-write":
+        Model.tool_command += f" && ! touch {outside}"
     Controller.deny = sys.argv[1] == "deny"
     model, controller = [stack.enter_context(ThreadingHTTPServer(("127.0.0.1", 0), handler))
                          for handler in (Model, Controller)]
@@ -66,7 +71,7 @@ with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
     token = root / "token"
     token.write_text("fixture")
     identity = {**Controller.identity, "event_key": "source"}
-    os.environ.update(CODEX_HOME=str(home), CODEX_GATEWAY_KEY="fixture", CODEX_SANDBOX_MODE="danger-full-access",
+    os.environ.update(CODEX_HOME=str(home), CODEX_GATEWAY_KEY="fixture", CODEX_SANDBOX_MODE=sandbox,
                       AGENTTEAMS_CODEX_MESSAGE_EXECUTION=json.dumps(identity), AGENTTEAMS_AUTH_TOKEN_FILE=str(token),
                       AGENTTEAMS_PROCESS_ID=identity["process_id"], AGENTTEAMS_STORAGE_PREFIX=str(root / "storage"),
                       AGENTTEAMS_CONTROLLER_URL=f"http://127.0.0.1:{controller.server_port}")
@@ -87,6 +92,8 @@ with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
                 confirm_native_tool(matrix, identity, item)
             if event.get("method") == "turn/completed":
                 break
+    if sandbox == "workspace-write":
+        assert not outside.exists(), "Native shell escaped its writable workspace"
     if Controller.deny:
         assert Controller.rejected and not Model.marker.exists() and not Controller.commits
     else:
@@ -95,4 +102,4 @@ with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
         data = (root / "storage" / artifact["key"]).read_bytes()
         assert hashlib.sha256(data).hexdigest() == artifact["sha256"]
         assert json.loads(data)["results"][0]["content"]["exitCode"] == 0
-    print("Native tool admission passed:", sys.argv[1])
+    print("Native tool admission passed:", sys.argv[1], sandbox)

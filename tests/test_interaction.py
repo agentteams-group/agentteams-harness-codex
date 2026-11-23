@@ -112,6 +112,7 @@ class InteractionTests(unittest.TestCase):
                     "agentteams_codex.bridge.prepare",
                     return_value=("test", "instructions"),
                 ),
+                patch("agentteams_codex.bridge.prepare_turn", return_value=({'role': 'worker', 'sources': [], 'sourceEvent': '$request'}, '', None)),
                 patch("agentteams_codex.bridge.Client", side_effect=factory),
             ):
                 result = bridge.run_turn(event, {"status": "queued"})

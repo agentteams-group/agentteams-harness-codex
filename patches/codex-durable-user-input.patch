@@ -1,0 +1,1904 @@
+diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
+index 0d4d3c3..7951738 100644
+--- a/codex-rs/Cargo.lock
++++ b/codex-rs/Cargo.lock
+@@ -394,7 +394,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+ 
+ [[package]]
+ name = "app_test_support"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -1864,7 +1864,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-graph-store"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-protocol",
+  "codex-state",
+@@ -1878,7 +1878,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-agent-identity"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -1897,7 +1897,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-analytics"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-app-server-protocol",
+  "codex-git-utils",
+@@ -1918,7 +1918,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-ansi-escape"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "ansi-to-tui",
+  "ratatui",
+@@ -1927,7 +1927,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-api"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "assert_matches",
+@@ -1961,7 +1961,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "app_test_support",
+@@ -2054,7 +2054,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-client"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-app-server",
+  "codex-app-server-protocol",
+@@ -2081,7 +2081,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-daemon"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "codex-app-server-protocol",
+@@ -2102,7 +2102,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-protocol"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -2130,7 +2130,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-test-client"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -2152,7 +2152,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-app-server-transport"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "axum",
+@@ -2194,7 +2194,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-apply-patch"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "assert_cmd",
+@@ -2214,7 +2214,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-arg0"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "codex-apply-patch",
+@@ -2234,7 +2234,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-async-utils"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "pretty_assertions",
+  "tokio",
+@@ -2243,7 +2243,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-aws-auth"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "aws-config",
+  "aws-credential-types",
+@@ -2258,7 +2258,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-backend-client"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "codex-api",
+@@ -2275,7 +2275,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-backend-openapi-models"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "serde",
+  "serde_json",
+@@ -2284,7 +2284,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-bwrap"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "cc",
+  "libc",
+@@ -2293,7 +2293,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-chatgpt"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -2314,7 +2314,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cli"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "app_test_support",
+@@ -2391,7 +2391,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-client"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-http-client",
+  "eventsource-stream",
+@@ -2403,7 +2403,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-config"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "base64 0.22.1",
+  "chrono",
+@@ -2427,7 +2427,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-tasks"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -2458,7 +2458,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-tasks-client"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -2472,7 +2472,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-cloud-tasks-mock-client"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "chrono",
+  "codex-cloud-tasks-client",
+@@ -2481,7 +2481,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-code-mode"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-code-mode-protocol",
+  "codex-protocol",
+@@ -2497,7 +2497,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-code-mode-host"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "codex-code-mode",
+@@ -2513,7 +2513,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-code-mode-protocol"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-protocol",
+  "pretty_assertions",
+@@ -2525,11 +2525,11 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-collaboration-mode-templates"
+-version = "0.0.0"
++version = "0.143.0"
+ 
+ [[package]]
+ name = "codex-config"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -2577,7 +2577,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-connectors"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "codex-config",
+@@ -2595,7 +2595,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-connectors-extension"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-connectors",
+  "codex-core-plugins",
+@@ -2607,7 +2607,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-context-fragments"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-protocol",
+  "codex-utils-string",
+@@ -2615,7 +2615,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "arc-swap",
+@@ -2741,7 +2741,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core-api"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-analytics",
+  "codex-app-server-protocol",
+@@ -2761,7 +2761,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core-plugins"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -2808,7 +2808,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-core-skills"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "codex-analytics",
+@@ -2842,7 +2842,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "assert_cmd",
+@@ -2888,7 +2888,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec-server"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "arc-swap",
+@@ -2940,7 +2940,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-exec-server-protocol"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-file-system",
+@@ -2955,7 +2955,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-execpolicy"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -2972,7 +2972,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-execpolicy-legacy"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "allocative",
+  "anyhow",
+@@ -2992,7 +2992,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-experimental-api-macros"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "proc-macro2",
+  "quote",
+@@ -3001,7 +3001,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-extension-api"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-config",
+  "codex-context-fragments",
+@@ -3015,7 +3015,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-external-agent-migration"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-hooks",
+  "pretty_assertions",
+@@ -3027,7 +3027,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-external-agent-sessions"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "chrono",
+  "codex-app-server-protocol",
+@@ -3041,7 +3041,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-features"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-otel",
+  "codex-protocol",
+@@ -3054,7 +3054,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-feedback"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "codex-login",
+@@ -3068,7 +3068,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-file-search"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -3084,7 +3084,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-file-system"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "bytes",
+  "codex-protocol",
+@@ -3096,7 +3096,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-file-watcher"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "notify",
+  "pretty_assertions",
+@@ -3107,7 +3107,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-git-utils"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3132,7 +3132,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-goal-extension"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3154,7 +3154,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-guardian"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-core",
+  "codex-extension-api",
+@@ -3163,7 +3163,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-home"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-extension-api",
+  "codex-utils-absolute-path",
+@@ -3174,7 +3174,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-hooks"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3197,7 +3197,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-http-client"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "bytes",
+  "codex-utils-cargo-bin",
+@@ -3228,7 +3228,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-image-generation-extension"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-api",
+@@ -3254,7 +3254,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-install-context"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "codex-utils-home-dir",
+@@ -3264,7 +3264,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-keyring-store"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "keyring",
+  "tracing",
+@@ -3272,7 +3272,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-linux-sandbox"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "clap",
+  "codex-core",
+@@ -3297,7 +3297,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-lmstudio"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-core",
+  "codex-model-provider-info",
+@@ -3311,7 +3311,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-login"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -3352,7 +3352,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-mcp"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "arc-swap",
+@@ -3387,7 +3387,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-mcp-extension"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-config",
+  "codex-connectors-extension",
+@@ -3412,7 +3412,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-mcp-server"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "codex-arg0",
+@@ -3445,7 +3445,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-memories-extension"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-core",
+  "codex-extension-api",
+@@ -3466,7 +3466,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-memories-read"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-protocol",
+  "codex-shell-command",
+@@ -3476,7 +3476,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-memories-write"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3513,7 +3513,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-message-history"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-config",
+  "memchr",
+@@ -3527,7 +3527,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-model-provider"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-agent-identity",
+  "codex-api",
+@@ -3550,7 +3550,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-model-provider-info"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-api",
+  "codex-protocol",
+@@ -3566,7 +3566,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-models-manager"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "chrono",
+  "codex-collaboration-mode-templates",
+@@ -3585,7 +3585,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-network-proxy"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -3621,7 +3621,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-ollama"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "assert_matches",
+  "async-stream",
+@@ -3641,7 +3641,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-otel"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "chrono",
+  "codex-api",
+@@ -3672,7 +3672,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-plugin"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-config",
+  "codex-protocol",
+@@ -3685,7 +3685,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-process-hardening"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "libc",
+  "pretty_assertions",
+@@ -3693,7 +3693,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-prompts"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "codex-context-fragments",
+@@ -3707,7 +3707,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-protocol"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "chardetng",
+@@ -3748,7 +3748,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-realtime-webrtc"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "libwebrtc",
+  "thiserror 2.0.18",
+@@ -3757,7 +3757,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-response-debug-context"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-api",
+@@ -3768,7 +3768,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-responses-api-proxy"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -3785,7 +3785,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-rmcp-client"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "axum",
+@@ -3826,7 +3826,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-rollout"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -3850,7 +3850,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-rollout-trace"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "codex-code-mode",
+@@ -3866,7 +3866,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-sandboxing"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "codex-network-proxy",
+@@ -3889,7 +3889,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-secrets"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "age",
+  "anyhow",
+@@ -3910,7 +3910,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-shell-command"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -3931,7 +3931,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-shell-escalation"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -3951,7 +3951,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-skills"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "include_dir",
+@@ -3960,7 +3960,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-skills-extension"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-core-skills",
+  "codex-exec-server",
+@@ -3982,7 +3982,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-state"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "chrono",
+@@ -4006,7 +4006,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-stdio-to-uds"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "codex-uds",
+@@ -4018,7 +4018,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-terminal-detection"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "pretty_assertions",
+  "tracing",
+@@ -4026,7 +4026,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-test-binary-support"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-arg0",
+  "tempfile",
+@@ -4034,7 +4034,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-thread-manager-sample"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "clap",
+@@ -4045,7 +4045,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-thread-store"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "chrono",
+  "codex-git-utils",
+@@ -4067,7 +4067,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-tools"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-code-mode",
+  "codex-connectors",
+@@ -4091,7 +4091,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-tui"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "app_test_support",
+@@ -4201,7 +4201,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-uds"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "async-io",
+  "pretty_assertions",
+@@ -4213,7 +4213,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-absolute-path"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "dirs",
+  "dunce",
+@@ -4227,14 +4227,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-approval-presets"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-protocol",
+ ]
+ 
+ [[package]]
+ name = "codex-utils-cache"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "lru 0.16.3",
+  "sha1 0.10.6",
+@@ -4243,7 +4243,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-cargo-bin"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "assert_cmd",
+  "runfiles",
+@@ -4252,7 +4252,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-cli"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "clap",
+  "codex-protocol",
+@@ -4264,15 +4264,15 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-elapsed"
+-version = "0.0.0"
++version = "0.143.0"
+ 
+ [[package]]
+ name = "codex-utils-fuzzy-match"
+-version = "0.0.0"
++version = "0.143.0"
+ 
+ [[package]]
+ name = "codex-utils-home-dir"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "dirs",
+@@ -4282,7 +4282,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-image"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-utils-cache",
+@@ -4295,7 +4295,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-json-to-toml"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "pretty_assertions",
+  "serde_json",
+@@ -4304,7 +4304,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-oss"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-core",
+  "codex-lmstudio",
+@@ -4314,7 +4314,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-output-truncation"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-protocol",
+  "codex-utils-string",
+@@ -4323,7 +4323,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-path"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-utils-absolute-path",
+  "dunce",
+@@ -4333,7 +4333,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-path-uri"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "base64 0.22.1",
+  "codex-utils-absolute-path",
+@@ -4349,7 +4349,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-plugins"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-exec-server",
+  "codex-utils-absolute-path",
+@@ -4362,7 +4362,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-pty"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "filedescriptor",
+@@ -4378,7 +4378,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-readiness"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "assert_matches",
+  "thiserror 2.0.18",
+@@ -4388,14 +4388,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-rustls-provider"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "rustls",
+ ]
+ 
+ [[package]]
+ name = "codex-utils-sandbox-summary"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-core",
+  "codex-model-provider-info",
+@@ -4406,7 +4406,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-sleep-inhibitor"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "core-foundation 0.9.4",
+  "libc",
+@@ -4416,14 +4416,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-stream-parser"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "pretty_assertions",
+ ]
+ 
+ [[package]]
+ name = "codex-utils-string"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "pretty_assertions",
+  "regex-lite",
+@@ -4433,14 +4433,14 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-utils-template"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "pretty_assertions",
+ ]
+ 
+ [[package]]
+ name = "codex-v8-poc"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "pretty_assertions",
+  "v8",
+@@ -4448,7 +4448,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-web-search-extension"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "codex-api",
+  "codex-core",
+@@ -4467,7 +4467,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "codex-windows-sandbox"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "base64 0.22.1",
+@@ -4724,7 +4724,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "core_test_support"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "assert_cmd",
+@@ -9110,7 +9110,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "mcp_test_support"
+-version = "0.0.0"
++version = "0.143.0"
+ dependencies = [
+  "anyhow",
+  "codex-login",
+diff --git a/codex-rs/app-server-protocol/src/protocol/v2/thread.rs b/codex-rs/app-server-protocol/src/protocol/v2/thread.rs
+index 367a4a6..49f22ff 100644
+--- a/codex-rs/app-server-protocol/src/protocol/v2/thread.rs
++++ b/codex-rs/app-server-protocol/src/protocol/v2/thread.rs
+@@ -1293,12 +1293,22 @@ pub struct ThreadInjectItemsParams {
+     pub thread_id: String,
+     /// Raw Responses API items to append to the thread's model-visible history.
+     pub items: Vec<JsonValue>,
++    /// Append User messages durably to this exact active regular turn instead
++    /// of queueing them for later consumption. Intended for a caller holding
++    /// a tool result until new inputs have reached native history and rollout.
++    #[ts(optional = nullable)]
++    pub persist_to_active_turn: Option<String>,
++    /// Trusted framework metadata for subsequently started native spans only.
++    #[ts(optional = nullable)]
++    pub span_attributes: Option<std::collections::BTreeMap<String, String>>,
+ }
+ 
+ #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+ #[serde(rename_all = "camelCase")]
+ #[ts(export_to = "v2/")]
+-pub struct ThreadInjectItemsResponse {}
++pub struct ThreadInjectItemsResponse {
++    pub persisted_to_active_turn: Option<String>,
++}
+ 
+ #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+ #[serde(rename_all = "camelCase")]
+diff --git a/codex-rs/app-server/README.md b/codex-rs/app-server/README.md
+index 8300c70..4059f67 100644
+--- a/codex-rs/app-server/README.md
++++ b/codex-rs/app-server/README.md
+@@ -169,7 +169,7 @@ Example with notification opt-out:
+ - `thread/backgroundTerminals/terminate` — terminate one running background terminal by app-server `processId` (experimental; requires `capabilities.experimentalApi`); returns whether a process was terminated.
+ - `thread/rollback` — deprecated and will be removed soon. Drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
+ - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. `clientUserMessageId` is optional; when supplied, the corresponding `userMessage` item echoes it as `clientId`. Experimental `runtimeWorkspaceRoots` replaces the thread-scoped runtime workspace roots used to materialize `:workspace_roots`; paths must be absolute. Prefer experimental `permissions` profile selection by id for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode". Deprecated experimental `multiAgentMode` is ignored; Ultra reasoning effort selects proactive behavior.
+-- `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
++- `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `persistedToActiveTurn` (null for ordinary queued/history injection).
+ - `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. `clientUserMessageId` is optional; when supplied, the corresponding `userMessage` item echoes it as `clientId`. Review and manual compaction turns reject `turn/steer`.
+ - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
+ - `thread/realtime/start` — start a thread-scoped realtime session (experimental); pass `outputModality: "text"` or `outputModality: "audio"` to choose model output, optionally pass `model` and, for websocket transport only, `version` to override configured realtime selection for this session only, and pass `includeStartupContext: false` to omit Codex's generated startup context. By default, automatic Codex text follows the protocol's speakable output path. Pass `clientManagedHandoffs: true` to disable automatic Codex response delivery so only the client's explicit append calls produce handoffs. Pass `codexResponsesAsItems: true` to send automatic Codex responses as realtime conversation items instead, and optionally pass `codexResponseItemPrefix` to prepend experiment instructions to those items. For V1 sessions, pass `codexResponseHandoffPrefix` while item mode is disabled to route automatic Codex commentary through `conversation.handoff.append` with that prefix; final answers remain unprefixed. Returns `{}` and streams `thread/realtime/*` notifications. Omit `transport` for the websocket transport, or pass `{ "type": "webrtc", "sdp": "..." }` to create an AVAS/v1 WebRTC session from a browser-generated SDP offer; the remote answer SDP is emitted as `thread/realtime/sdp`. Explicit `version: "v2"` requests are rejected for WebRTC.
+@@ -833,6 +833,19 @@ Invoke a plugin by including a UI mention token such as `@sample` in the text in
+ 
+ Use `thread/inject_items` to append prebuilt Responses API items to a loaded thread’s prompt history without starting a user turn. These items are persisted to the rollout and included in subsequent model requests. Any `input_image` items must use inline data URLs; remote HTTP(S) image URLs are rejected.
+ 
++A framework holding a tool result can set `persistToActiveTurn` to that exact
++active Regular turn ID. This mode accepts only non-empty User text messages,
++appends them directly to native history and flushes rollout before returning
++`persistedToActiveTurn` equal to the requested ID. It never creates a pending
++queue copy. A mismatched, finished or non-Regular turn is rejected. The caller
++must retain its tool-result barrier until this acknowledgement and its own
++session checkpoint complete; ordinary `thread/inject_items`/steer acknowledgement
++is not an active-input durability receipt. Optional `spanAttributes` update only
++subsequently started spans in that turn after persistence, keeping earlier spans
++and other turns unchanged. No messages, tool arguments or results are added to
++telemetry by this API.
++
++
+ ```json
+ { "method": "thread/inject_items", "id": 36, "params": {
+     "threadId": "thr_123",
+diff --git a/codex-rs/app-server/src/request_processors/turn_processor.rs b/codex-rs/app-server/src/request_processors/turn_processor.rs
+index 3ff64cd..a247dbb 100644
+--- a/codex-rs/app-server/src/request_processors/turn_processor.rs
++++ b/codex-rs/app-server/src/request_processors/turn_processor.rs
+@@ -817,14 +817,25 @@ impl TurnRequestProcessor {
+             .map_err(invalid_request)?;
+         validate_response_item_image_urls(&items)?;
+ 
+-        thread
+-            .inject_response_items(items)
+-            .await
+-            .map_err(|err| match err {
+-                CodexErr::InvalidRequest(message) => invalid_request(message),
+-                err => internal_error(format!("failed to inject response items: {err}")),
+-            })?;
+-        Ok(ThreadInjectItemsResponse {})
++        let persisted_to_active_turn = params.persist_to_active_turn;
++        let result = if let Some(turn_id) = persisted_to_active_turn.as_deref() {
++            thread
++                .persist_user_items_to_active_turn(
++                    turn_id,
++                    &items,
++                    &params.span_attributes.unwrap_or_default(),
++                )
++                .await
++        } else {
++            thread.inject_response_items(items).await
++        };
++        result.map_err(|err| match err {
++            CodexErr::InvalidRequest(message) => invalid_request(message),
++            err => internal_error(format!("failed to inject response items: {err}")),
++        })?;
++        Ok(ThreadInjectItemsResponse {
++            persisted_to_active_turn,
++        })
+     }
+ 
+     async fn set_app_server_client_info(
+diff --git a/codex-rs/core/src/client.rs b/codex-rs/core/src/client.rs
+index 0bf33b3..1a67dfe 100644
+--- a/codex-rs/core/src/client.rs
++++ b/codex-rs/core/src/client.rs
+@@ -1782,6 +1782,12 @@ impl ModelClientSession {
+         responses_metadata: &CodexResponsesMetadata,
+         inference_trace: &InferenceTraceContext,
+     ) -> Result<ResponseStream> {
++        if crate::native_admission::MODEL_ADMITTED
++            .try_with(|_| ())
++            .is_err()
++        {
++            crate::native_admission::invoke(serde_json::json!({"mode":"guard", "threadId":responses_metadata.thread_id,"turnId":responses_metadata.turn_id})).await?;
++        }
+         let wire_api = self.client.state.provider.info().wire_api;
+         match wire_api {
+             WireApi::Responses => {
+diff --git a/codex-rs/core/src/codex_thread.rs b/codex-rs/core/src/codex_thread.rs
+index c80268e..534b4e8 100644
+--- a/codex-rs/core/src/codex_thread.rs
++++ b/codex-rs/core/src/codex_thread.rs
+@@ -465,6 +465,19 @@ impl CodexThread {
+             .await;
+     }
+ 
++    /// Persist User inputs in an exact active regular turn before releasing a tool result.
++    pub async fn persist_user_items_to_active_turn(
++        &self,
++        expected_turn_id: &str,
++        items: &[ResponseItem],
++        attributes: &BTreeMap<String, String>,
++    ) -> CodexResult<()> {
++        self.codex
++            .session
++            .persist_user_items_to_active_turn(expected_turn_id, items, attributes)
++            .await
++    }
++
+     /// Record raw Responses API items without starting a new turn.
+     pub async fn inject_response_items(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
+         if items.is_empty() {
+diff --git a/codex-rs/core/src/lib.rs b/codex-rs/core/src/lib.rs
+index 91ccbd6..aa29dbe 100644
+--- a/codex-rs/core/src/lib.rs
++++ b/codex-rs/core/src/lib.rs
+@@ -52,6 +52,7 @@ mod hook_runtime;
+ mod image_preparation;
+ mod installation_id;
+ pub(crate) mod landlock;
++mod native_admission;
+ pub use landlock::spawn_command_under_linux_sandbox;
+ pub(crate) mod mcp;
+ mod mcp_skill_dependencies;
+diff --git a/codex-rs/core/src/native_admission.rs b/codex-rs/core/src/native_admission.rs
+new file mode 100644
+index 0000000..7ac6032
+--- /dev/null
++++ b/codex-rs/core/src/native_admission.rs
+@@ -0,0 +1,112 @@
++//! Optional trusted-host admission at the actual native model boundary.
++//! No model arguments can select the executable or its native scope.
++use std::process::Stdio;
++use std::sync::Arc;
++use std::time::Duration;
++
++use codex_protocol::error::{CodexErr, Result};
++use codex_protocol::models::MessagePhase;
++use codex_protocol::models::{ContentItem, ResponseItem};
++use serde_json::{Value, json};
++use tokio::io::AsyncWriteExt;
++
++use crate::context::{ContextualUserFragment, HookAdditionalContext};
++use crate::session::session::Session;
++use crate::session::turn_context::TurnContext;
++
++tokio::task_local! { pub(crate) static MODEL_ADMITTED: (); }
++
++pub(crate) async fn invoke(request: Value) -> Result<Value> {
++    let Ok(command) = std::env::var("CODEX_NATIVE_ADMISSION_COMMAND") else {
++        return Ok(json!({"ok":true,"receipts":[]}));
++    };
++    let failed =
++        || CodexErr::InvalidRequest("Native framework admission requires verification".to_owned());
++    let argv: Vec<String> = serde_json::from_str(&command).map_err(|_| failed())?;
++    let (program, args) = argv.split_first().ok_or_else(failed)?;
++    let mut child = tokio::process::Command::new(program)
++        .args(args)
++        .stdin(Stdio::piped())
++        .stdout(Stdio::piped())
++        .stderr(Stdio::null())
++        .kill_on_drop(true)
++        .spawn()
++        .map_err(|_| failed())?;
++    let mut input = child.stdin.take().ok_or_else(failed)?;
++    input
++        .write_all(request.to_string().as_bytes())
++        .await
++        .map_err(|_| failed())?;
++    drop(input);
++    let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
++        .await
++        .map_err(|_| failed())?
++        .map_err(|_| failed())?;
++    if !output.status.success() || output.stdout.len() > 1024 * 1024 {
++        return Err(failed());
++    }
++    let reply: Value = serde_json::from_slice(&output.stdout).map_err(|_| failed())?;
++    if reply["ok"] != true {
++        return Err(failed());
++    }
++    Ok(reply)
++}
++
++pub(crate) async fn prepare(
++    sess: &Arc<Session>,
++    turn: &Arc<TurnContext>,
++) -> Result<Option<String>> {
++    let reply =
++        invoke(json!({"mode":"prepare","threadId":sess.thread_id,"turnId":turn.sub_id})).await?;
++    let receipts = reply["receipts"].as_array().cloned().unwrap_or_default();
++    if receipts.len() > 50 {
++        return Err(CodexErr::InvalidRequest(
++            "Too many framework receipt fragments".to_owned(),
++        ));
++    }
++    let mut acknowledgements = Vec::new();
++    for receipt in receipts {
++        let id = receipt["receiptId"].as_str().ok_or_else(|| {
++            CodexErr::InvalidRequest("Invalid native receipt identity".to_owned())
++        })?;
++        let fact = receipt["fact"]
++            .as_str()
++            .filter(|fact| fact.len() <= 8192)
++            .ok_or_else(|| {
++                CodexErr::InvalidRequest("Invalid native receipt fragment".to_owned())
++            })?;
++        let item: ResponseItem = ContextualUserFragment::into(HookAdditionalContext::new(fact));
++        sess.record_conversation_items(turn, std::slice::from_ref(&item))
++            .await;
++        acknowledgements.push(json!({"receiptId":id,"item":item}));
++    }
++    if !acknowledgements.is_empty() {
++        sess.flush_rollout().await?;
++        invoke(json!({"mode":"ack","threadId":sess.thread_id,"turnId":turn.sub_id,"receipts":acknowledgements})).await?;
++    }
++    let Some(fact) = reply["complete"].as_str() else {
++        return Ok(None);
++    };
++    if fact.len() > 8192 {
++        return Err(CodexErr::InvalidRequest(
++            "Invalid native completion receipt".to_owned(),
++        ));
++    }
++    let item = ResponseItem::Message {
++        id: Some(uuid::Uuid::new_v4().to_string()),
++        role: "assistant".to_owned(),
++        content: vec![ContentItem::OutputText {
++            text: fact.to_owned(),
++        }],
++        phase: Some(MessagePhase::FinalAnswer),
++        internal_chat_message_metadata_passthrough: None,
++    };
++    if let Some(native) = crate::event_mapping::parse_turn_item(&item) {
++        sess.emit_turn_item_started(turn, &native).await;
++        sess.record_conversation_items(turn, std::slice::from_ref(&item))
++            .await;
++        sess.emit_turn_item_completed(turn, native).await;
++    }
++    sess.flush_rollout().await?;
++    Ok(Some(fact.to_owned()))
++}
+diff --git a/codex-rs/core/src/session/inject.rs b/codex-rs/core/src/session/inject.rs
+index 5c5b7d1..df8ac7a 100644
+--- a/codex-rs/core/src/session/inject.rs
++++ b/codex-rs/core/src/session/inject.rs
+@@ -35,6 +35,51 @@ impl Session {
+         }
+     }
+ 
++    /// Append User messages while the caller holds an active tool response.
++    /// No queued copy is created, so compaction and restart see the same history.
++    #[expect(
++        clippy::await_holding_invalid_type,
++        reason = "exact active turn validation and history append must remain atomic"
++    )]
++    pub(crate) async fn persist_user_items_to_active_turn(
++        &self,
++        expected_turn_id: &str,
++        items: &[ResponseItem],
++        attributes: &std::collections::BTreeMap<String, String>,
++    ) -> codex_protocol::error::Result<()> {
++        use codex_protocol::error::CodexErr;
++        use codex_protocol::models::ContentItem;
++        if items.is_empty() || items.iter().any(|item| !matches!(item,
++            ResponseItem::Message { role, content, .. } if role == "user"
++                && !content.is_empty() && content.iter().all(|part| matches!(part, ContentItem::InputText { .. })))) {
++            return Err(CodexErr::InvalidRequest("durable active input requires non-empty User text messages".to_owned()));
++        }
++        codex_otel::validate_span_attributes(attributes)
++            .map_err(|_| CodexErr::InvalidRequest("invalid native span attributes".to_owned()))?;
++        let active = self.active_turn.lock().await;
++        let task = active
++            .as_ref()
++            .and_then(|turn| turn.task.as_ref())
++            .ok_or_else(|| {
++                CodexErr::InvalidRequest("no active turn for durable input".to_owned())
++            })?;
++        if task.turn_context.sub_id != expected_turn_id
++            || task.kind != crate::state::TaskKind::Regular
++        {
++            return Err(CodexErr::InvalidRequest(
++                "durable input does not match the active regular turn".to_owned(),
++            ));
++        }
++        self.record_conversation_items(task.turn_context.as_ref(), items)
++            .await;
++        self.flush_rollout().await?;
++        task.turn_context
++            .turn_metadata_state
++            .trace_attributes
++            .extend(attributes);
++        Ok(())
++    }
++
+     /// Starts a regular turn with the provided items only if automatic idle work
+     /// is allowed for the current session state.
+     ///
+diff --git a/codex-rs/core/src/session/tests.rs b/codex-rs/core/src/session/tests.rs
+index 5ebce9a..d42dc24 100644
+--- a/codex-rs/core/src/session/tests.rs
++++ b/codex-rs/core/src/session/tests.rs
+@@ -11127,3 +11127,80 @@ async fn session_start_hooks_require_project_trust_without_config_toml() -> std:
+ 
+     Ok(())
+ }
++
++#[tokio::test]
++async fn durable_active_user_input_enters_history_without_a_queued_copy() {
++    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
++    sess.spawn_task(
++        Arc::clone(&tc),
++        Vec::new(),
++        NeverEndingTask {
++            kind: TaskKind::Regular,
++            listen_to_cancellation_token: true,
++        },
++    )
++    .await;
++    let item = ResponseItem::Message {
++        id: None,
++        role: "user".to_string(),
++        content: vec![ContentItem::InputText {
++            text: "durable source fixture".to_string(),
++        }],
++        phase: None,
++        internal_chat_message_metadata_passthrough: None,
++    };
++    assert!(
++        sess.persist_user_items_to_active_turn(
++            "wrong-turn",
++            std::slice::from_ref(&item),
++            &BTreeMap::new()
++        )
++        .await
++        .is_err()
++    );
++    assert!(
++        !sess
++            .state
++            .lock()
++            .await
++            .clone_history()
++            .raw_items()
++            .contains(&item)
++    );
++    sess.persist_user_items_to_active_turn(
++        &tc.sub_id,
++        std::slice::from_ref(&item),
++        &BTreeMap::new(),
++    )
++    .await
++    .unwrap();
++    assert!(
++        sess.state
++            .lock()
++            .await
++            .clone_history()
++            .raw_items()
++            .contains(&item)
++    );
++    assert!(!sess.input_queue.has_pending_input(&sess.active_turn).await);
++    sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
++}
++
++#[tokio::test]
++async fn durable_active_input_rejects_assistant_items() {
++    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
++    let item = ResponseItem::Message {
++        id: None,
++        role: "assistant".to_string(),
++        content: vec![ContentItem::OutputText {
++            text: "not a User input".to_string(),
++        }],
++        phase: None,
++        internal_chat_message_metadata_passthrough: None,
++    };
++    assert!(
++        sess.persist_user_items_to_active_turn("turn", &[item], &BTreeMap::new())
++            .await
++            .is_err()
++    );
++}
+diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
+index 708f42f..515edde 100644
+--- a/codex-rs/core/src/session/turn.rs
++++ b/codex-rs/core/src/session/turn.rs
+@@ -236,6 +236,9 @@ pub(crate) async fn run_turn(
+             break;
+         }
+ 
++        if let Some(fact) = crate::native_admission::prepare(&sess, &turn_context).await? {
++            return Ok(Some(fact));
++        }
+         let window_id = sess.current_window_id().await;
+         super::rollout_budget::maybe_record_reminder(
+             sess.as_ref(),
+@@ -296,6 +299,9 @@ pub(crate) async fn run_turn(
+         .await;
+         match sampling_request_result {
+             Ok((sampling_request_output, sampling_request_input)) => {
++                if let Some(fact) = crate::native_admission::prepare(&sess, &turn_context).await? {
++                    return Ok(Some(fact));
++                }
+                 let SamplingRequestResult {
+                     needs_follow_up: model_needs_follow_up,
+                     last_agent_message: sampling_request_last_agent_message,
+@@ -1914,16 +1920,37 @@ async fn try_run_sampling_request(
+         .features
+         .enabled(Feature::ConcurrentReasoningSummaries)
+         && turn_context.provider.info().is_openai();
+-    let mut stream = client_session
+-        .stream(
+-            prompt,
+-            &turn_context.model_info,
+-            &turn_context.session_telemetry,
+-            turn_context.reasoning_effort.clone(),
+-            turn_context.reasoning_summary,
+-            turn_context.config.service_tier.clone(),
+-            responses_metadata,
+-            &inference_trace,
++    crate::native_admission::invoke(
++        serde_json::json!({"mode":"guard", "threadId":sess.thread_id,"turnId":turn_context.sub_id}),
++    )
++    .await?;
++    // This span owns the actual model request through response.completed.
++    // Tool futures are drained later and must not extend inference duration.
++    let mut generation_span = Some(tracing::info_span!("gen_ai.chat",
++        langfuse.observation.type = "generation",
++        agentteams.model.purpose = "task",
++        gen_ai.operation.name = "chat",
++        gen_ai.request.model = %turn_context.model_info.slug,
++        gen_ai.usage.input_tokens = field::Empty,
++        gen_ai.usage.cache_read.input_tokens = field::Empty,
++        gen_ai.usage.output_tokens = field::Empty,
++        codex.usage.reasoning_output_tokens = field::Empty,
++        success = false,
++        error.type = field::Empty,
++    ));
++    let mut stream = crate::native_admission::MODEL_ADMITTED
++        .scope(
++            (),
++            client_session.stream(
++                prompt,
++                &turn_context.model_info,
++                &turn_context.session_telemetry,
++                turn_context.reasoning_effort.clone(),
++                turn_context.reasoning_summary,
++                turn_context.config.service_tier.clone(),
++                responses_metadata,
++                &inference_trace,
++            ),
+         )
+         .instrument(trace_span!("stream_request"))
+         .or_cancel(&cancellation_token)
+@@ -1955,11 +1982,6 @@ async fn try_run_sampling_request(
+             tool_name = field::Empty,
+             from = field::Empty,
+             codex.request.reasoning_effort = %reasoning_effort,
+-            gen_ai.usage.input_tokens = field::Empty,
+-            gen_ai.usage.cache_read.input_tokens = field::Empty,
+-            gen_ai.usage.output_tokens = field::Empty,
+-            codex.usage.reasoning_output_tokens = field::Empty,
+-            codex.usage.total_tokens = field::Empty,
+         );
+ 
+         let event = match stream
+@@ -2219,6 +2241,19 @@ async fn try_run_sampling_request(
+                 end_turn,
+                 ..
+             } => {
++                if let Some(span) = generation_span.take() {
++                    span.record("success", true);
++                    if let Some(usage) = token_usage.as_ref() {
++                        span.record("gen_ai.usage.input_tokens", usage.input_tokens);
++                        span.record("gen_ai.usage.cache_read.input_tokens", usage.cached_input());
++                        span.record("gen_ai.usage.output_tokens", usage.output_tokens);
++                        span.record(
++                            "codex.usage.reasoning_output_tokens",
++                            usage.reasoning_output_tokens,
++                        );
++                    }
++                    drop(span);
++                }
+                 flush_assistant_text_segments_all(
+                     &sess,
+                     &turn_context,
+@@ -2391,6 +2426,10 @@ async fn try_run_sampling_request(
+             }
+         }
+     };
++    if let Some(span) = generation_span.take() {
++        span.record("error.type", "model_stream_failed");
++        drop(span);
++    }
+     drop(sampling_timing_guard);
+ 
+     flush_assistant_text_segments_all(
+diff --git a/codex-rs/core/src/tasks/regular.rs b/codex-rs/core/src/tasks/regular.rs
+index 4083772..8491ca8 100644
+--- a/codex-rs/core/src/tasks/regular.rs
++++ b/codex-rs/core/src/tasks/regular.rs
+@@ -7,6 +7,7 @@ use crate::session::turn::run_turn;
+ use crate::session::turn_context::TurnContext;
+ use crate::session_startup_prewarm::SessionStartupPrewarmResolution;
+ use crate::state::TaskKind;
++use codex_otel::OpenTelemetrySpanExt;
+ use codex_protocol::protocol::EventMsg;
+ use codex_protocol::protocol::TurnStartedEvent;
+ use tracing::Instrument;
+@@ -44,6 +45,12 @@ impl SessionTask for RegularTask {
+         let sess = session.clone_session();
+         let turn_extension_data = session.turn_extension_data();
+         let run_turn_span = trace_span!("run_turn");
++        codex_otel::set_parent_from_context(
++            &run_turn_span,
++            tracing::Span::current()
++                .context()
++                .with_value(ctx.turn_metadata_state.trace_attributes.clone()),
++        );
+         // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
+         // not wait on startup prewarm resolution.
+         let prewarmed_client_session = async {
+diff --git a/codex-rs/core/src/tools/registry.rs b/codex-rs/core/src/tools/registry.rs
+index 2220d42..600693f 100644
+--- a/codex-rs/core/src/tools/registry.rs
++++ b/codex-rs/core/src/tools/registry.rs
+@@ -542,6 +542,12 @@ impl ToolRegistry {
+         let invocation_for_tool = invocation.clone();
+         let log_payload = invocation.payload.log_payload();
+ 
++        let native_tool_span = tracing::info_span!("tool.execute",
++            langfuse.observation.type = "tool",
++            tool.name = %tool_name_flat,
++            tool.call_id = %call_id_owned,
++            success = false,
++        );
+         let result = otel
+             .log_tool_result_with_tags(
+                 tool_name_flat.as_ref(),
+@@ -567,18 +573,18 @@ impl ToolRegistry {
+                 },
+             )
+             .await;
++        native_tool_span.record("success", matches!(&result, Ok((_, true))));
++        drop(native_tool_span);
+         let success = match &result {
+             Ok((_, success)) => *success,
+             Err(_) => false,
+         };
+         emit_metric_for_tool_read(&invocation, success);
+-        let post_tool_use_payload = if success {
++        let post_tool_use_payload = {
+             let guard = response_cell.lock().await;
+             guard
+                 .as_ref()
+                 .and_then(|result| result.post_tool_use_payload.clone())
+-        } else {
+-            None
+         };
+         let post_tool_use_outcome = if let Some(post_tool_use_payload) = post_tool_use_payload {
+             Some(
+diff --git a/codex-rs/core/src/turn_metadata.rs b/codex-rs/core/src/turn_metadata.rs
+index 0a1f781..6c6d65b 100644
+--- a/codex-rs/core/src/turn_metadata.rs
++++ b/codex-rs/core/src/turn_metadata.rs
+@@ -84,6 +84,7 @@ pub async fn detached_memory_responses_metadata(
+ 
+ #[derive(Clone, Debug)]
+ pub(crate) struct TurnMetadataState {
++    pub(crate) trace_attributes: codex_otel::TurnSpanAttributes,
+     cwd: AbsolutePathBuf,
+     repo_root: Option<String>,
+     session_id: String,
+@@ -127,6 +128,7 @@ impl TurnMetadataState {
+             .to_string(),
+         );
+         Self {
++            trace_attributes: codex_otel::TurnSpanAttributes::default(),
+             cwd,
+             repo_root,
+             session_id,
+diff --git a/codex-rs/otel/src/lib.rs b/codex-rs/otel/src/lib.rs
+index 87ccbbf..22e1666 100644
+--- a/codex-rs/otel/src/lib.rs
++++ b/codex-rs/otel/src/lib.rs
+@@ -26,6 +26,7 @@ pub use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
+ pub use crate::metrics::timer::Timer;
+ pub use crate::metrics::*;
+ pub use crate::provider::OtelProvider;
++pub use crate::provider::TurnSpanAttributes;
+ pub use crate::trace_context::context_from_w3c_trace_context;
+ pub use crate::trace_context::current_span_trace_id;
+ pub use crate::trace_context::current_span_w3c_trace_context;
+@@ -37,6 +38,7 @@ pub use crate::trace_context::traceparent_context_from_env;
+ pub use crate::trace_context::validate_tracestate_entries;
+ pub use crate::trace_context::validate_tracestate_member;
+ pub use codex_utils_string::sanitize_metric_tag_value;
++pub use tracing_opentelemetry::OpenTelemetrySpanExt;
+ 
+ #[derive(Debug, Clone, Serialize, Display)]
+ #[serde(rename_all = "snake_case")]
+diff --git a/codex-rs/otel/src/provider.rs b/codex-rs/otel/src/provider.rs
+index 26f732d..305b09e 100644
+--- a/codex-rs/otel/src/provider.rs
++++ b/codex-rs/otel/src/provider.rs
+@@ -255,12 +255,22 @@ fn tracer_provider_builder(
+     span_attributes: BTreeMap<String, String>,
+ ) -> TracerProviderBuilder {
+     let builder = SdkTracerProvider::builder().with_resource(resource.clone());
+-    if span_attributes.is_empty() {
+-        builder
+-    } else {
+-        builder.with_span_processor(SpanAttributesProcessor {
+-            attributes: span_attributes,
+-        })
++    builder.with_span_processor(SpanAttributesProcessor {
++        attributes: span_attributes,
++    })
++}
++
++/// Mutable metadata owned by one native turn, inherited through its OTEL context.
++/// Values are copied when a child span starts; past spans are never relabeled.
++#[derive(Clone, Debug, Default)]
++pub struct TurnSpanAttributes(std::sync::Arc<std::sync::RwLock<BTreeMap<String, String>>>);
++
++impl TurnSpanAttributes {
++    pub fn extend(&self, attributes: &BTreeMap<String, String>) {
++        self.0
++            .write()
++            .expect("turn trace attributes poisoned")
++            .extend(attributes.clone());
+     }
+ }
+ 
+@@ -274,9 +284,19 @@ struct SpanAttributesProcessor {
+ }
+ 
+ impl SpanProcessor for SpanAttributesProcessor {
+-    fn on_start(&self, span: &mut Span, _cx: &Context) {
+-        for (key, value) in self.attributes.iter() {
+-            span.set_attribute(KeyValue::new(key.clone(), value.clone()));
++    fn on_start(&self, span: &mut Span, cx: &Context) {
++        let mut attributes = self.attributes.clone();
++        if let Some(updates) = cx.get::<TurnSpanAttributes>() {
++            attributes.extend(
++                updates
++                    .0
++                    .read()
++                    .expect("turn trace attributes poisoned")
++                    .clone(),
++            );
++        }
++        for (key, value) in attributes {
++            span.set_attribute(KeyValue::new(key, value));
+         }
+     }
+ 
+@@ -462,6 +482,59 @@ mod tests {
+     use pretty_assertions::assert_eq;
+     use std::path::PathBuf;
+ 
++    #[test]
++    fn turn_attribute_updates_apply_only_to_future_spans_in_that_turn() {
++        use opentelemetry::trace::Span as _;
++        use opentelemetry::trace::Tracer as _;
++        use opentelemetry::trace::TracerProvider as _;
++        use opentelemetry_sdk::trace::InMemorySpanExporter;
++        let exporter = InMemorySpanExporter::default();
++        let provider = tracer_provider_builder(
++            &Resource::builder_empty().build(),
++            BTreeMap::from([("source.ids".to_owned(), "initial".to_owned())]),
++        )
++        .with_simple_exporter(exporter.clone())
++        .build();
++        let tracer = provider.tracer("turn-attributes-test");
++        let updates = TurnSpanAttributes::default();
++        let context = Context::new().with_value(updates.clone());
++        let mut first = tracer.start_with_context("before-refresh", &context);
++        updates.extend(&BTreeMap::from([(
++            "source.ids".to_owned(),
++            "initial,later".to_owned(),
++        )]));
++        let mut second = tracer.start_with_context("after-refresh", &context);
++        let mut other = tracer.start_with_context("other-turn", &Context::new());
++        first.end();
++        second.end();
++        other.end();
++        provider.force_flush().unwrap();
++        let actual: Vec<_> = exporter
++            .get_finished_spans()
++            .unwrap()
++            .into_iter()
++            .map(|span| {
++                (
++                    span.name.to_string(),
++                    span.attributes
++                        .into_iter()
++                        .find(|attribute| attribute.key.as_str() == "source.ids")
++                        .unwrap()
++                        .value
++                        .to_string(),
++                )
++            })
++            .collect();
++        assert_eq!(
++            actual,
++            vec![
++                ("before-refresh".to_owned(), "initial".to_owned()),
++                ("after-refresh".to_owned(), "initial,later".to_owned()),
++                ("other-turn".to_owned(), "initial".to_owned())
++            ]
++        );
++    }
++
+     #[test]
+     fn resource_attributes_include_host_name_when_present() {
+         let attrs = resource_attributes(

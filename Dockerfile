@@ -2,14 +2,31 @@ ARG MC_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/mc:20260216
 ARG AGENTTEAMS_CONTROLLER_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-controller:v1.2.6
 FROM ${MC_IMAGE} AS mc
 FROM ${AGENTTEAMS_CONTROLLER_IMAGE} AS controller
+# Fixed native SDK capability: durable User input while a tool result is held.
+FROM rust:1.95-bookworm AS native-sdk
+ARG CODEX_SDK_REF=c4d748f586a84a3ed5b6aceb82e9a1db4abb1cda
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang cmake pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch rust-v0.143.0 https://github.com/openai/codex.git /build/codex \
+    && test "$(git -C /build/codex rev-parse HEAD)" = "${CODEX_SDK_REF}"
+COPY patches/codex-durable-user-input.patch /tmp/codex-durable-user-input.patch
+RUN git -C /build/codex apply /tmp/codex-durable-user-input.patch
+WORKDIR /build/codex/codex-rs
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,id=at129-codex-sdk-${TARGETARCH},target=/build/codex/codex-rs/target,sharing=locked \
+    CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 cargo build --locked --release -p codex-app-server --bin codex-app-server \
+    && cp target/release/codex-app-server /usr/local/bin/codex-app-server
 FROM node:22.22-bookworm-slim
 ARG CODEX_VERSION=0.143.0
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git jq python3 python3-venv tini \
+    bubblewrap ca-certificates curl git jq python3 python3-venv tini \
     && rm -rf /var/lib/apt/lists/*
 RUN --mount=type=cache,target=/root/.npm npm install --global --no-audit --no-fund --loglevel=info \
     --registry="${NPM_REGISTRY}" --fetch-timeout=60000 --fetch-retries=1 "@openai/codex@${CODEX_VERSION}"
+COPY --from=native-sdk /usr/local/bin/codex-app-server /usr/local/bin/codex-app-server
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
 COPY --from=controller /usr/local/bin/agt /usr/local/bin/agt
 # AT is a named BuildKit context, pinned by Makefile or overridden for local tests.
