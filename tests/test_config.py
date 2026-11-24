@@ -41,10 +41,11 @@ class ConfigTests(unittest.TestCase):
             },
         }
 
-    def prepare(self):
+    def prepare(self, task_scope=None):
         with patch.dict(os.environ, {}, clear=True):
             model, instructions = prepare(
-                self.config, self.root / ".codex", self.root / "workspace", self.plugin
+                self.config, self.root / ".codex", self.root / "workspace", self.plugin,
+                task_scope=task_scope,
             )
         return (
             model,
@@ -70,6 +71,26 @@ class ConfigTests(unittest.TestCase):
         self.prepare()
         self.assertEqual(json.loads((self.root / ".codex/skill-warnings.json").read_text()), [])
         self.assertTrue((self.root / ".agents/skills/broken/SKILL.md").is_file())
+
+    def test_assigned_role_contract_reaches_every_native_turn_without_a_file_tool(self):
+        self.config["member"]["role"] = "team_leader"
+        self.config["desired"]["skills"] = ["squad-role"]
+        skill = self.root / "skills/squad-role/SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("# Squad role\nUse the configured repository route and pass accepted bundles to review.\n")
+        for scope in (None, {"planning": ["main"]}, {"execution": "work"},
+                      {"review": ["work", "submission"]}, {"completion": "main"}):
+            with self.subTest(scope=scope):
+                _, instructions, _ = self.prepare(scope)
+                self.assertIn(skill.read_text(), instructions)
+
+    def test_missing_assigned_role_blocks_task_execution_but_keeps_configuration_repairable(self):
+        self.config["desired"]["skills"] = ["missing-role"]
+        self.prepare()
+        for scope in ({"planning": ["main"]}, {"execution": "work"},
+                      {"review": ["work", "submission"]}, {"completion": "main"}):
+            with self.subTest(scope=scope), self.assertRaisesRegex(ValueError, "Assigned Skill unavailable"):
+                self.prepare(scope)
 
     def test_worker_has_no_leader_skills_and_gateway_keeps_route(self):
         model, prompt, config = self.prepare()
