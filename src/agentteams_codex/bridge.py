@@ -424,6 +424,8 @@ class Bridge:
             body = f"/{'approve' if approved else 'reject'} {request_id} {context}"
             answer = None
         if isinstance(answer, dict):
+            if answer.get("kind") not in (None, "ask_user"):
+                return True
             if answer.get("agent_id") and answer["agent_id"] != self.user_id:
                 return True
             request_id = next((key for key, value in self.pending_requests.items()
@@ -795,7 +797,7 @@ class Bridge:
                                             response = matches[0]
                                             selected = response.get("selected", [])
                                             labels = {option["label"] for option in question.get("options", [])}
-                                            if not isinstance(selected, list) or any(value not in labels for value in selected):
+                                            if not isinstance(selected, list) or len(selected) > 1 or any(not isinstance(value, str) or value not in labels for value in selected):
                                                 raise ValueError("Unknown question option")
                                             custom = response.get("custom", "")
                                             if not isinstance(custom, str) or (not selected and not custom.strip()):
