@@ -44,6 +44,19 @@ class ManagedTests(unittest.TestCase):
                 self.assertEqual(content.get("m.mentions", {}).get("user_ids", []), expected)
                 self.assertEqual(bool(content.get("com.agentteams.auto_source_mention")), bool(expected))
                 managed.matrix.message_delivered.assert_called_once_with({}, "$reply")
+                if sender == "@manager:test" and expected:
+                    # The registered Worker room also contains the Human admin.
+                    # Its "personal" projection does not make it a two-person
+                    # DM for the Manager receiving this reply.
+                    reply = {"type": "m.room.message", "event_id": "$reply",
+                             "sender": bridge.user_id, "content": {
+                                 **content, "msgtype": "m.text", "body": "Configuration applied"}}
+                    payload = {"rooms": {"join": {event["room_id"]: {
+                        "timeline": {"events": [reply]}}}}}
+                    received = actionable_events(payload, {event["room_id"]: "team"},
+                                                 sender, {bridge.user_id})
+                    self.assertEqual(len(received), 1)
+                    self.assertTrue(received[0]["auto_source_mention"])
 
     def test_manager_invite_uses_projected_direct_sender_allowlist(self):
         managed = ManagedMatrix.__new__(ManagedMatrix)
