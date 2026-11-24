@@ -35,13 +35,16 @@ for line in sys.stdin:
  elif m["method"]=="turn/start":
   result={"turn":{"id":"turn-1"}}
   send({"id":"human-request","method":METHOD,"params":{"threadId":"thread-1","turnId":"turn-1","command":"printf approved","questions":QUESTIONS}})
+ elif m["method"]=="turn/interrupt":
+  result={}
+  send({"method":"turn/completed","params":{"turn":{"id":"turn-1","status":"interrupted"}}})
  else: result={}
  send({"id":m["id"],"result":result})
 """
 
 
 class InteractionTests(unittest.TestCase):
-    def run_case(self, method, command, stale_context=False, questions=None, responses=None):
+    def run_case(self, method, command, stale_context=False, questions=None, responses=None, structured=False, termination=None):
         with (
             tempfile.TemporaryDirectory() as temporary,
             patch.dict(os.environ, {}, clear=True),
@@ -51,6 +54,7 @@ class InteractionTests(unittest.TestCase):
             runtime.write_text("member:\n  runtime: codex\n")
             bridge = Bridge.__new__(Bridge)
             bridge.name = "codex"
+            bridge.user_id = "@codex:matrix"
             bridge.runtime_path = runtime
             bridge.workspace = root
             bridge.home = root / ".codex"
@@ -71,9 +75,21 @@ class InteractionTests(unittest.TestCase):
                 "body": "task",
                 "kind": "text",
             }
+            if termination == 'expired':
+                os.environ['CODEX_TASK_TIMEOUT_SECONDS'] = '1'
 
             def respond(_event, text, _suffix, approval=None):
                 if "needs human input" in text:
+                    if structured:
+                        answer = {"kind": "tool_approval", "agent_id": bridge.user_id,
+                            "confirmation_id": approval["request_id"], "context_id": approval["context_id"],
+                            "answer": "approved" if command.startswith("/approve") else "rejected"}
+                        bridge.handle_control({**event, "body": "Human decision", "answer": {**answer, "agent_id": "@other:matrix"}})
+                        self.assertTrue(bridge.controls.empty())
+                        bridge.handle_control({**event, "sender": "@intruder:matrix", "body": "Human decision", "answer": answer})
+                        self.assertTrue(bridge.controls.empty())
+                        bridge.handle_control({**event, "body": "Human decision", "answer": answer})
+                        return
                     if stale_context:
                         bridge.handle_control({**event, "body": "/approve human-request old:turn"})
                     bridge.handle_control({**event, "body": command})
@@ -82,8 +98,15 @@ class InteractionTests(unittest.TestCase):
 
             def respond_card(_room, content, _transaction):
                 card = content["org.agentteams.run"]["blocks"][0]
+                if card.get("status") in {"answered", "cancelled", "expired"}:
+                    self.assertEqual(card["status"], termination or "answered")
+                    return
                 self.assertEqual(card["requested_of"], event["sender"])
                 self.assertNotIn("/answer", content["body"])
+                if termination:
+                    if termination == 'cancelled':
+                        bridge.handle_control({**event, 'body': '/cancel'})
+                    return
                 if responses is None:
                     bridge.handle_control({**event, "body": command})
                 else:
@@ -115,7 +138,18 @@ class InteractionTests(unittest.TestCase):
                 patch("agentteams_codex.bridge.prepare_turn", return_value=({'role': 'worker', 'sources': [], 'sourceEvent': '$request'}, '', None)),
                 patch("agentteams_codex.bridge.Client", side_effect=factory),
             ):
-                result = bridge.run_turn(event, {"status": "queued"})
+                if termination == 'expired':
+                    with self.assertRaises(TimeoutError):
+                        bridge.run_turn(event, {"status": "queued"})
+                else:
+                    result = bridge.run_turn(event, {"status": "queued"})
+            if termination:
+                receipts = [call.args[1]['org.agentteams.run']['blocks'][0]
+                            for call in bridge.matrix.send_content.call_args_list]
+                self.assertEqual([card['status'] for card in receipts], ['pending', termination])
+                self.assertEqual(receipts[0]['confirmation_id'], receipts[1]['confirmation_id'])
+                self.assertEqual(bridge.pending_requests, {})
+                return
             approvals = [call.args[3] for call in bridge.reply.call_args_list if len(call.args) > 3 and call.args[3]]
             if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
                 self.assertEqual([data["status"] for data in approvals], ["pending", "approved" if command.startswith("/approve") else "rejected"])
@@ -156,6 +190,16 @@ class InteractionTests(unittest.TestCase):
             {"answers": {"q": {"answers": ["chosen option"]}}},
         )
 
+    def test_question_cancellation_settles_the_original_card(self):
+        self.run_case('item/tool/requestUserInput', '', termination='cancelled')
+
+    def test_question_timeout_settles_the_original_card(self):
+        self.run_case('item/tool/requestUserInput', '', termination='expired')
+
+    def test_structured_approval_resumes_the_original_native_turn(self):
+        self.assertEqual(self.run_case("item/commandExecution/requestApproval", "/approve human-request", structured=True), {"decision": "accept"})
+        self.assertEqual(self.run_case("item/fileChange/requestApproval", "/reject human-request", structured=True), {"decision": "decline"})
+
     def test_reply_serializes_contract_into_matrix_event(self):
         bridge = Bridge.__new__(Bridge)
         bridge.matrix = Mock()
@@ -186,6 +230,24 @@ class InteractionTests(unittest.TestCase):
         self.assertTrue(bridge.controls.empty())
         bridge.handle_control({"room_id": "!room:test", "sender": "@human:test", "body": "/approve req-1"})
         self.assertEqual(bridge.controls.get_nowait()[1:3], ("/approve", "req-1"))
+
+    def test_question_receipt_retries_from_persisted_journal_after_restart(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bridge = Bridge.__new__(Bridge)
+            bridge.journal = Journal(Path(temporary) / "journal.json")
+            bridge.matrix = Mock()
+            bridge.matrix.send_content.side_effect = OSError("offline")
+            bridge.question_receipt({"room_id": "!room:test", "event_id": "$turn"}, {"_confirmation_id": "question-1"}, "answered")
+            self.assertTrue(bridge.journal.data["question_receipts"])
+            restored = Bridge.__new__(Bridge)
+            restored.journal = Journal(bridge.journal.path)
+            restored.matrix = Mock()
+            restored.flush_question_receipts()
+            self.assertFalse(restored.journal.data["question_receipts"])
+            args = restored.matrix.send_content.call_args.args
+            self.assertEqual(args[0], "!room:test")
+            self.assertEqual(args[1]["org.agentteams.run"]["blocks"][0]["status"], "answered")
+            self.assertEqual(args[2], bridge.matrix.send_content.call_args.args[2])
 
 
 if __name__ == "__main__":

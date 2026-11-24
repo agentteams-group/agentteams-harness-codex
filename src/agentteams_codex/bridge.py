@@ -77,7 +77,11 @@ def actionable_events(payload, rooms, user_id, agents, allowed_senders=None):
         for event in room.get("timeline", {}).get("events", []):
             content = event.get("content", {})
             if event.get("event_id") in by_id and isinstance(content.get("com.agentteams.answer"), dict):
-                by_id[event["event_id"]]["answer"] = content["com.agentteams.answer"]
+                from runtime_hitl import attention_answer
+                if not attention_answer(content):
+                    by_id[event["event_id"]]["answer"] = content["com.agentteams.answer"]
+                else:
+                    by_id[event["event_id"]].pop("answer", None)
             trigger = content.get("m.teamharness.trigger", {})
             if (
                 event.get("type") == "m.room.message"
@@ -381,10 +385,49 @@ class Bridge:
             f"codex:{event['event_id']}:{suffix}",
         )
 
+    def question_receipt(self, event, request, status):
+        content = {
+            "msgtype": "m.text", "body": f"Question {status}",
+            "org.agentteams.run": {"version": "1", "blocks": [{
+                "type": "confirmation", "tool_name": "ask_human",
+                "confirmation_id": request["_confirmation_id"], "status": status,
+            }]},
+        }
+        transaction = f"codex:{event['event_id']}:question:{request['_confirmation_id']}:{status}"
+        with self.journal.lock:
+            self.journal.data.setdefault("question_receipts", {})[transaction] = {"room": event["room_id"], "content": content}
+            self.journal.save()
+        self.flush_question_receipts()
+
+    def flush_question_receipts(self):
+        with self.journal.lock:
+            pending = list(self.journal.data.get("question_receipts", {}).items())
+        for transaction, receipt in pending:
+            try:
+                self.matrix.send_content(receipt["room"], receipt["content"], transaction)
+            except Exception as error:
+                trace_event("hitl.receipt_pending", error_type=type(error).__name__)
+                continue
+            with self.journal.lock:
+                self.journal.data["question_receipts"].pop(transaction, None)
+                self.journal.save()
+
     def handle_control(self, event):
         body = event["body"]
         answer = event.get("answer")
+        if isinstance(answer, dict) and answer.get("kind") == "tool_approval":
+            from runtime_hitl import approval_decision
+            decision = approval_decision({"com.agentteams.answer": answer}, self.user_id)
+            if not decision:
+                return True
+            request_id, context, approved = decision
+            body = f"/{'approve' if approved else 'reject'} {request_id} {context}"
+            answer = None
         if isinstance(answer, dict):
+            if answer.get("kind") not in (None, "ask_user"):
+                return True
+            if answer.get("agent_id") and answer["agent_id"] != self.user_id:
+                return True
             request_id = next((key for key, value in self.pending_requests.items()
                                if value.get("_confirmation_id") == answer.get("confirmation_id")), None)
             if request_id is None:
@@ -474,6 +517,7 @@ class Bridge:
         while not self.stop.is_set():
             stage = "config.refresh"
             try:
+                self.flush_question_receipts()
                 prefix = os.getenv("AGENTTEAMS_STORAGE_PREFIX")
                 if prefix:
                     temporary = self.runtime_path.with_suffix(".incoming")
@@ -753,7 +797,7 @@ class Bridge:
                                             response = matches[0]
                                             selected = response.get("selected", [])
                                             labels = {option["label"] for option in question.get("options", [])}
-                                            if not isinstance(selected, list) or any(value not in labels for value in selected):
+                                            if not isinstance(selected, list) or len(selected) > 1 or any(not isinstance(value, str) or value not in labels for value in selected):
                                                 raise ValueError("Unknown question option")
                                             custom = response.get("custom", "")
                                             if not isinstance(custom, str) or (not selected and not custom.strip()):
@@ -779,6 +823,8 @@ class Bridge:
                                     result = {"action": "decline", "content": None}
                                 client.send({"id": request["id"], "result": result})
                                 self.pending_requests.pop(request_id, None)
+                                if method == "item/tool/requestUserInput" and request.get("_confirmation_id"):
+                                    self.question_receipt(event, request, "answered")
                                 if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
                                     self.reply(event, f"Codex approval {request_id}: {result['decision']}.",
                                         f"approval:{request_id}:resolved", {
@@ -834,6 +880,7 @@ class Bridge:
                                     "org.agentteams.run": {"version": "1", "blocks": [{
                                         "type": "confirmation", "tool_name": "ask_human",
                                         "confirmation_id": confirmation_id, "questions": questions,
+                                        "reply_format": "com.agentteams.answer", "status": "pending",
                                         "requested_of": event["sender"],
                                         "expires_at": int((time.time() + max(0, deadline - time.monotonic())) * 1000),
                                     }]},
@@ -852,6 +899,7 @@ class Bridge:
                                 f"request:{request_id}",
                                 {
                                     "version": 1, "runtime": "codex", "request_id": request_id,
+                                    "reply_format": "com.agentteams.answer",
                                     "context_id": f"{thread_id}:{turn['id']}",
                                     "status": "pending",
                                     "expires_at": int((time.time() + max(0, deadline - time.monotonic())) * 1000),
@@ -934,6 +982,8 @@ class Bridge:
             finally:
                 self.active = None
                 for request_id, request in list(self.pending_requests.items()):
+                    if request.get("_confirmation_id"):
+                        self.question_receipt(event, request, "expired" if time.monotonic() >= deadline else "cancelled")
                     if request["method"] in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
                         self.reply(event, f"Codex approval {request_id} expired.", f"approval:{request_id}:expired", {
                             "version": 1, "runtime": "codex", "request_id": request_id, "status": "expired",
