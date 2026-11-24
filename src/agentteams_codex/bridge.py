@@ -303,7 +303,7 @@ class Bridge:
                      "recovery": {"task_id": task_id, "team_id": team, "thread_id": None, "spec": claimed["spec"],
                                   **{k: execution[k] for k in ("instance_id", "generation", "process_id")}}}
             if task.get("task_plan_id"):
-                event["_task_protocol_meta"] = {"teamharness_coordination": {
+                event["_task_protocol_meta"] = {"agent_matrix_user_id": self.user_id, "teamharness_coordination": {
                     "kind": "task_assigned", "task_id": task_id, "main_task_id": task.get("main_task_id", ""),
                     "project_id": task.get("project_id", ""), "delivery_id": task.get("notifyTxn")}}
             # Supersede only the same Task's local admission. Other Matrix
