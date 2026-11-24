@@ -18,6 +18,33 @@ from worker_matrix_state import matrix_event_key
 
 
 class ManagedTests(unittest.TestCase):
+    def test_private_reply_mentions_projected_sender_without_team_roster_membership(self):
+        for room_kind, sender, automatic, expected in [
+            ("personal", "@manager:test", False, ["@manager:test"]),
+            ("personal", "@human:test", False, ["@human:test"]),
+            ("team", "@manager:test", False, []),
+            ("personal", "@stranger:test", False, []),
+            ("personal", "@worker:test", False, []),
+            ("personal", "@manager:test", True, []),
+        ]:
+            with self.subTest(room=room_kind, sender=sender, automatic=automatic):
+                managed = ManagedMatrix.__new__(ManagedMatrix)
+                event = {"room_id": "!private:test", "event_id": "$request", "shared_key": "key",
+                         "sender": sender, "auto_source_mention": automatic}
+                bridge = managed.bridge = Mock(user_id="@worker:test", agent_ids={"@worker:test"},
+                    rooms={event["room_id"]: room_kind}, config={"matrix": {"transport": {"dm": {
+                        "policy": "allowlist", "allowFrom": ["@manager:test", "@human:test"]}}}})
+                managed.matrix = Mock()
+                managed.matrix.message.return_value = {"recovery": "deliver"}
+                managed.matrix.message_claim.return_value = {"recovery": "deliver", "identity": {},
+                    "saved_result": "Configuration applied", "execution": {"checkpoint": {}}}
+                with patch("agentteams_codex.managed_matrix.publish_raw_saved", return_value="$reply") as send:
+                    managed.message_turn({"event": event})
+                content = send.call_args.kwargs["content"]
+                self.assertEqual(content.get("m.mentions", {}).get("user_ids", []), expected)
+                self.assertEqual(bool(content.get("com.agentteams.auto_source_mention")), bool(expected))
+                managed.matrix.message_delivered.assert_called_once_with({}, "$reply")
+
     def test_manager_invite_uses_projected_direct_sender_allowlist(self):
         managed = ManagedMatrix.__new__(ManagedMatrix)
         managed.receipts = Mock()

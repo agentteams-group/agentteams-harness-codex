@@ -317,6 +317,14 @@ class ManagedMatrix:
         content = {"m.relates_to": {"m.in_reply_to": {"event_id": event["event_id"]}}}
         source = source_agent_reply_user_id(event, self.bridge.agent_ids, self.bridge.user_id)
         mentions = reply_mention_user_ids(event, text, self.bridge.agent_ids, self.bridge.user_id)
+        # The registered Manager is an allowed private sender, but is not a
+        # member of the execution Team roster. Direct replies still address it.
+        sender = event.get("sender")
+        allowed = self.bridge.config.get("matrix", {}).get("transport", {}).get("dm", {}).get("allowFrom", [])
+        if (not source and self.bridge.rooms.get(room) == "personal" and sender != self.bridge.user_id
+                and sender in allowed and event.get("auto_source_mention") is not True):
+            source = sender
+            mentions = sorted(set(mentions) | {sender})
         if source:
             content["com.agentteams.auto_source_mention"] = True
         if event.get("coordination_session"):
