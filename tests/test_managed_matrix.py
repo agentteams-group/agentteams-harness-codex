@@ -58,6 +58,20 @@ class ManagedTests(unittest.TestCase):
                     self.assertEqual(len(received), 1)
                     self.assertTrue(received[0]["auto_source_mention"])
 
+    def test_native_task_reply_renders_business_presentation_and_keeps_delivery_body(self):
+        managed=ManagedMatrix.__new__(ManagedMatrix)
+        event={"room_id":"!private:test","event_id":"$request","shared_key":"key","sender":"@human:test"}
+        managed.bridge=Mock(user_id="@worker:test",agent_ids={"@worker:test"},rooms={event["room_id"]:"personal"},config={})
+        managed.matrix=Mock()
+        managed.matrix.message.return_value={"recovery":"deliver"}
+        managed.matrix.message_claim.return_value={"recovery":"deliver","identity":{},"saved_result":"[Task system receipt] canonical", "execution":{"checkpoint":{}}}
+        with patch("agentteams_codex.managed_matrix.publish_raw_saved",return_value="$reply") as send:
+            managed.message_turn({"event":event,"task_presentation":"已受理，接下来在任务房间处理。"})
+        self.assertEqual(send.call_args.args[2],"[Task system receipt] canonical")
+        content=send.call_args.kwargs['content']
+        self.assertEqual(content['org.agentteams.run']['blocks'][0]['text'],"已受理，接下来在任务房间处理。")
+        self.assertTrue(content['org.agentteams.progress_only'])
+
     def test_manager_invite_uses_projected_direct_sender_allowlist(self):
         managed = ManagedMatrix.__new__(ManagedMatrix)
         managed.receipts = Mock()

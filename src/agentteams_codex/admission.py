@@ -49,7 +49,13 @@ class Scope:
                           'registrations': {'mcp__teamharness__task': REGISTRATION},
                           'observed': prior.get('observed', {}),
                           'blocked': prior.get('blocked', False)}
+            if prior.get('context', {}).get('sourceEvent') == context['sourceEvent'] and prior.get('complete'):
+                self.frame['complete'] = prior['complete']
+                self.frame['dispatch_receipts'] = prior.get('dispatch_receipts', [])
             write(self.path, self.frame)
+
+    def presentation(self):
+        return json.loads(self.path.read_text()).get('complete', {}).get('displayText')
 
     def require_admitted(self):
         # The pinned SDK reports unexpected task errors as TurnComplete. Use
@@ -116,6 +122,9 @@ def phase_complete(outcome, context):
         if frame['context']['sourceEvent'] != context['sourceEvent']:
             raise RuntimeError('Native Task receipt belongs to another admission')
         frame['complete'] = {'receiptId': outcome['receiptId'], 'fact': outcome['fact']}
+        if isinstance(outcome.get('displayText'), str):
+            frame['complete']['displayText'] = outcome['displayText']
+        frame['dispatch_receipts'] = outcome.get('extraReceipts', [])
         write(path, frame)
 
 
@@ -158,7 +167,7 @@ def main():
         return
     complete = frame.get('complete')
     if complete:
-        result = {'ok': True, 'receipts': [complete]}
+        result = {'ok': True, 'receipts': [complete, *frame.get('dispatch_receipts', [])]}
         if request['mode'] == 'prepare':
             result['complete'] = complete['fact']
         else:

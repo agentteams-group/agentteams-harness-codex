@@ -98,6 +98,8 @@ class InteractionTests(unittest.TestCase):
 
             def respond_card(_room, content, _transaction):
                 card = content["org.agentteams.run"]["blocks"][0]
+                if card['type'] == 'tool_call':
+                    return '$tool'
                 if card.get("status") in {"answered", "cancelled", "expired"}:
                     self.assertEqual(card["status"], termination or "answered")
                     return
