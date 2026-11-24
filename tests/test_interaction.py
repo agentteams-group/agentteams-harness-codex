@@ -35,13 +35,16 @@ for line in sys.stdin:
  elif m["method"]=="turn/start":
   result={"turn":{"id":"turn-1"}}
   send({"id":"human-request","method":METHOD,"params":{"threadId":"thread-1","turnId":"turn-1","command":"printf approved","questions":QUESTIONS}})
+ elif m["method"]=="turn/interrupt":
+  result={}
+  send({"method":"turn/completed","params":{"turn":{"id":"turn-1","status":"interrupted"}}})
  else: result={}
  send({"id":m["id"],"result":result})
 """
 
 
 class InteractionTests(unittest.TestCase):
-    def run_case(self, method, command, stale_context=False, questions=None, responses=None, structured=False):
+    def run_case(self, method, command, stale_context=False, questions=None, responses=None, structured=False, termination=None):
         with (
             tempfile.TemporaryDirectory() as temporary,
             patch.dict(os.environ, {}, clear=True),
@@ -72,6 +75,8 @@ class InteractionTests(unittest.TestCase):
                 "body": "task",
                 "kind": "text",
             }
+            if termination == 'expired':
+                os.environ['CODEX_TASK_TIMEOUT_SECONDS'] = '1'
 
             def respond(_event, text, _suffix, approval=None):
                 if "needs human input" in text:
@@ -94,10 +99,14 @@ class InteractionTests(unittest.TestCase):
             def respond_card(_room, content, _transaction):
                 card = content["org.agentteams.run"]["blocks"][0]
                 if card.get("status") in {"answered", "cancelled", "expired"}:
-                    self.assertEqual(card["status"], "answered")
+                    self.assertEqual(card["status"], termination or "answered")
                     return
                 self.assertEqual(card["requested_of"], event["sender"])
                 self.assertNotIn("/answer", content["body"])
+                if termination:
+                    if termination == 'cancelled':
+                        bridge.handle_control({**event, 'body': '/cancel'})
+                    return
                 if responses is None:
                     bridge.handle_control({**event, "body": command})
                 else:
@@ -129,7 +138,18 @@ class InteractionTests(unittest.TestCase):
                 patch("agentteams_codex.bridge.prepare_turn", return_value=({'role': 'worker', 'sources': [], 'sourceEvent': '$request'}, '', None)),
                 patch("agentteams_codex.bridge.Client", side_effect=factory),
             ):
-                result = bridge.run_turn(event, {"status": "queued"})
+                if termination == 'expired':
+                    with self.assertRaises(TimeoutError):
+                        bridge.run_turn(event, {"status": "queued"})
+                else:
+                    result = bridge.run_turn(event, {"status": "queued"})
+            if termination:
+                receipts = [call.args[1]['org.agentteams.run']['blocks'][0]
+                            for call in bridge.matrix.send_content.call_args_list]
+                self.assertEqual([card['status'] for card in receipts], ['pending', termination])
+                self.assertEqual(receipts[0]['confirmation_id'], receipts[1]['confirmation_id'])
+                self.assertEqual(bridge.pending_requests, {})
+                return
             approvals = [call.args[3] for call in bridge.reply.call_args_list if len(call.args) > 3 and call.args[3]]
             if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
                 self.assertEqual([data["status"] for data in approvals], ["pending", "approved" if command.startswith("/approve") else "rejected"])
@@ -169,6 +189,12 @@ class InteractionTests(unittest.TestCase):
             ),
             {"answers": {"q": {"answers": ["chosen option"]}}},
         )
+
+    def test_question_cancellation_settles_the_original_card(self):
+        self.run_case('item/tool/requestUserInput', '', termination='cancelled')
+
+    def test_question_timeout_settles_the_original_card(self):
+        self.run_case('item/tool/requestUserInput', '', termination='expired')
 
     def test_structured_approval_resumes_the_original_native_turn(self):
         self.assertEqual(self.run_case("item/commandExecution/requestApproval", "/approve human-request", structured=True), {"decision": "accept"})
