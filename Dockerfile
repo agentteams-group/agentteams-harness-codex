@@ -18,6 +18,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,id=at129-codex-sdk-${TARGETARCH},target=/build/codex/codex-rs/target,sharing=locked \
     CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0 cargo build --locked --release -p codex-app-server --bin codex-app-server \
     && cp target/release/codex-app-server /usr/local/bin/codex-app-server
+# Build the public CLI from the same pinned Core as the protocol assets.
+FROM higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/golang:1.26-alpine AS public-cli
+WORKDIR /build
+COPY --from=at /agentteams-controller/ ./
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -o /out/agt ./cmd/agt && /out/agt assistant --help > /dev/null
+
 FROM node:22.22-bookworm-slim
 ARG CODEX_VERSION=0.143.0
 ARG NPM_REGISTRY=https://registry.npmjs.org/
@@ -28,7 +35,7 @@ RUN --mount=type=cache,target=/root/.npm npm install --global --no-audit --no-fu
     --registry="${NPM_REGISTRY}" --fetch-timeout=60000 --fetch-retries=1 "@openai/codex@${CODEX_VERSION}"
 COPY --from=native-sdk /usr/local/bin/codex-app-server /usr/local/bin/codex-app-server
 COPY --from=mc /usr/bin/mc /usr/local/bin/mc.bin
-COPY --from=controller /usr/local/bin/agt /usr/local/bin/agt
+COPY --from=public-cli /out/agt /usr/local/bin/agt
 # AT is a named BuildKit context, pinned by Makefile or overridden for local tests.
 COPY --from=at /shared/lib/ /opt/agentteams/scripts/lib/
 COPY --from=at /deepseek-harness/scripts/*.py /opt/agentteams/transport/
@@ -37,11 +44,12 @@ COPY --from=at /LICENSE /usr/share/licenses/agentteams/LICENSE
 COPY pyproject.toml /opt/agentteams/codex/pyproject.toml
 COPY src/ /opt/agentteams/codex/src/
 COPY configs/requirements.toml /etc/codex/requirements.toml
-RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir /opt/agentteams/codex \
+RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir /opt/agentteams/codex -r /opt/agentteams/scripts/lib/telemetry/requirements.txt \
     && chmod +x /opt/agentteams/scripts/lib/mc-wrapper.sh \
     && ln -s /opt/agentteams/scripts/lib/mc-wrapper.sh /usr/local/bin/mc
 COPY scripts/entrypoint.sh /opt/agentteams/entrypoint.sh
 RUN chmod +x /opt/agentteams/entrypoint.sh
-ENV PYTHONPATH=/opt/agentteams/scripts/lib:/opt/agentteams/transport
+ENV PYTHONPATH=/opt/agentteams/scripts/lib:/opt/agentteams/transport \
+    PATH=/opt/venv/bin:${PATH}
 EXPOSE 8088
 ENTRYPOINT ["/usr/bin/tini", "--", "/opt/agentteams/entrypoint.sh"]

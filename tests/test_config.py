@@ -114,6 +114,10 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config["matrix"]["accessToken"], "matrix-example")
             self.assertEqual(config["desired"]["model"]["gatewayKey"], "worker-example")
             raw = (self.root / ".codex/config.toml").read_text()
+            native = tomllib.loads(raw)
+            self.assertEqual(native['sandbox_mode'], 'workspace-write')
+            self.assertTrue(native['sandbox_workspace_write']['network_access'])
+            self.assertTrue(native['sandbox_workspace_write']['exclude_slash_tmp'])
             self.assertEqual(tomllib.loads(raw)["model_providers"]["agentteams"]["base_url"], "https://gateway/model-route/v1")
             self.assertNotIn("worker-example", raw)
             record["storage"]["memberPrefix"] = "agents/bob"
@@ -134,6 +138,10 @@ class ConfigTests(unittest.TestCase):
         for _ in range(2):
             _, _, config = self.prepare()
             self.assertEqual(config.get("web_search"), "disabled")
+
+    def test_unmanaged_account_keeps_native_network_default(self):
+        _, _, config = self.prepare()
+        self.assertNotIn('network_access', config['sandbox_workspace_write'])
 
     def test_chatgpt_keeps_native_web_search_default(self):
         self.prepare()

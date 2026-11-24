@@ -27,7 +27,7 @@ def prepare_turn(plugin, role, event, call=None):
     notification = meta.get("teamharness_coordination")
     if notification:
         notification = dict(notification)
-        if notification.get("id"):
+        if notification.get("id") and notification.get("kind") != "assistant_digest":
             admission = asyncio.run(common(plugin, "phase_recovery").notify(
                 notification["id"], event["event_id"], "begin"))
             if admission.get("active") is not True:

@@ -294,9 +294,19 @@ class ManagedMatrix:
                 if record.get("direct"):
                     self.bridge.execution_status(event, "stopped")
                 return
+            if (event.get("_task_protocol_meta") or {}).get("teamharness_coordination", {}).get("kind") == "assistant_digest":
+                matrix.message_cancel(identity)
+                record["status"] = "completed"
+                self.bridge.journal.save()
+                return
             outputs = changed_outbox_files(self.bridge.workspace, record["outbox_before"])
             claim = self.save_outputs(identity, event, answer, outputs)
         if claim["recovery"] != "deliver":
+            return
+        if (event.get("_task_protocol_meta") or {}).get("teamharness_coordination", {}).get("kind") == "assistant_digest":
+            matrix.message_cancel(identity)
+            record["status"] = "completed"
+            self.bridge.journal.save()
             return
         cp = claim["execution"]["checkpoint"]
         def bind(next_cp):

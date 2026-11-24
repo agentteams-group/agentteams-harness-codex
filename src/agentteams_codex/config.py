@@ -192,6 +192,8 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
             "supports_websockets = false",
         ]
     lines += ['[sandbox_workspace_write]', 'exclude_slash_tmp = true']
+    if os.getenv('AGENTTEAMS_CONTROLLER_URL'):
+        lines += ['network_access = true']
     lines += [
         "[mcp_servers.teamharness]",
         f"command = {json.dumps(sys.executable)}",
