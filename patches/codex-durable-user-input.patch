@@ -1707,8 +1707,30 @@ index 4083772..8491ca8 100644
          // Regular turns emit `TurnStarted` inline so first-turn lifecycle does
          // not wait on startup prewarm resolution.
          let prewarmed_client_session = async {
+diff --git a/codex-rs/core/src/tools/handlers/unified_exec/write_stdin.rs b/codex-rs/core/src/tools/handlers/unified_exec/write_stdin.rs
+index 0b1f9d1..7dbc2d3 100644
+--- a/codex-rs/core/src/tools/handlers/unified_exec/write_stdin.rs
++++ b/codex-rs/core/src/tools/handlers/unified_exec/write_stdin.rs
+@@ -107,7 +107,16 @@ impl CoreToolRuntime for WriteStdinHandler {
+         matches!(payload, ToolPayload::Function { .. })
+     }
+ 
+-    fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
++    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
++        if std::env::var_os("CODEX_NATIVE_ADMISSION_COMMAND").is_some() {
++            let ToolPayload::Function { arguments } = &invocation.payload else {
++                return None;
++            };
++            return Some(PreToolUsePayload {
++                tool_name: super::HookToolName::bash(),
++                tool_input: serde_json::from_str(arguments).ok()?,
++            });
++        }
+         // `write_stdin` is transport for an existing exec session. Empty writes
+         // are background polls, and non-empty writes continue a command that
+         // already ran PreToolUse as Bash, so do not emit a second pre hook here.
 diff --git a/codex-rs/core/src/tools/registry.rs b/codex-rs/core/src/tools/registry.rs
-index 2220d42..600693f 100644
+index 2220d42..fe2ffd0 100644
 --- a/codex-rs/core/src/tools/registry.rs
 +++ b/codex-rs/core/src/tools/registry.rs
 @@ -542,6 +542,12 @@ impl ToolRegistry {
@@ -1724,7 +1746,7 @@ index 2220d42..600693f 100644
          let result = otel
              .log_tool_result_with_tags(
                  tool_name_flat.as_ref(),
-@@ -567,18 +573,18 @@ impl ToolRegistry {
+@@ -567,18 +573,42 @@ impl ToolRegistry {
                  },
              )
              .await;
@@ -1736,7 +1758,31 @@ index 2220d42..600693f 100644
          };
          emit_metric_for_tool_read(&invocation, success);
 -        let post_tool_use_payload = if success {
-+        let post_tool_use_payload = {
++        let post_tool_use_payload = if std::env::var_os("CODEX_NATIVE_ADMISSION_COMMAND").is_some() {
++            // Managed admission records the return of each invocation. A live
++            // exec session is a returned handle, not an unknown tool outcome.
++            let guard = response_cell.lock().await;
++            tool.pre_tool_use_payload(&invocation).and_then(|pre| {
++                let response = if let Some(output) = guard.as_ref() {
++                    match output.result.to_response_item(&invocation.call_id, &invocation.payload) {
++                        ResponseInputItem::FunctionCallOutput {
++                            output: FunctionCallOutputPayload { body, .. }, ..
++                        } => serde_json::to_value(body).ok(),
++                        _ => None,
++                    }
++                } else if let Err(FunctionCallError::RespondToModel(message)) = &result {
++                    Some(serde_json::json!({"error": message}))
++                } else {
++                    None
++                }?;
++                Some(PostToolUsePayload {
++                    tool_name: pre.tool_name,
++                    tool_use_id: invocation.call_id.clone(),
++                    tool_input: pre.tool_input,
++                    tool_response: response,
++                })
++            })
++        } else {
              let guard = response_cell.lock().await;
              guard
                  .as_ref()
