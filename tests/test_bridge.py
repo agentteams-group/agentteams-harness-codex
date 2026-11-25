@@ -29,7 +29,7 @@ from agentteams_codex.client import CodexError
 
 
 class StateTests(unittest.TestCase):
-    def test_recovered_quiet_phase_does_not_restore_internal_receipt_as_answer(self):
+    def test_recovered_quiet_phase_retains_delivery_body_without_restarting_model(self):
         with tempfile.TemporaryDirectory() as temporary:
             bridge = Bridge.__new__(Bridge)
             bridge.workspace = bridge.home = bridge.plugin = Path(temporary)
@@ -48,9 +48,11 @@ class StateTests(unittest.TestCase):
                  patch('agentteams_codex.bridge.completed_answer', return_value='[Task system receipt] saved'), \
                  patch('agentteams_codex.bridge.Client') as factory:
                 scope.return_value.presentation.return_value = ''
+                scope.return_value.reply.return_value = '[Task system receipt] saved'
                 client = factory.return_value.__enter__.return_value
                 client.open_thread.return_value = {'id': 'thread-1', 'turns': []}
-                self.assertEqual(bridge.run_turn(event, bridge.journal.data['events']['$planning']), '')
+                self.assertEqual(bridge.run_turn(event, bridge.journal.data['events']['$planning']),
+                                 '[Task system receipt] saved')
                 self.assertEqual(Journal(bridge.journal.path).data['events']['$planning']['task_presentation'], '')
                 client.start.assert_not_called()
 

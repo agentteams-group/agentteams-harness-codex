@@ -723,7 +723,7 @@ class Bridge:
                 if presentation is not None:
                     record["task_presentation"] = presentation
                     self.journal.save()
-                    return presentation
+                    return native_scope.reply() or recovered
                 return recovered
             if record.get("status") == "running" and not (event.get("recovery") or event.get("message_execution")):
                 # The original start may have reached the model before a crash.
@@ -975,7 +975,7 @@ class Bridge:
                             if presentation is not None:
                                 record["task_presentation"] = presentation
                                 self.journal.save()
-                                return presentation
+                                return native_scope.reply()
                             return (
                                 "\n".join(filter(None, answers))
                                 or "Codex completed the task."

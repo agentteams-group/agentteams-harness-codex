@@ -58,6 +58,10 @@ class Scope:
         complete = json.loads(self.path.read_text()).get('complete')
         return complete.get('displayText', '') if complete else None
 
+    def reply(self):
+        complete = json.loads(self.path.read_text()).get('complete')
+        return (complete.get('displayText') or complete['fact']) if complete else None
+
     def require_admitted(self):
         # The pinned SDK reports unexpected task errors as TurnComplete. Use
         # only the private framework callback outcome, never the model text.
