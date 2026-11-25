@@ -59,6 +59,7 @@ class StateTests(unittest.TestCase):
             bridge.stop = threading.Event()
             bridge.pending_requests = {}
             bridge.reply = Mock()
+            bridge.matrix = Mock()
             bridge.direct_member = Mock(return_value=False)
             event = {"event_id": "$original", "room_id": "!dm", "sender": "@human:test", "body": "original", "kind": "text"}
             supplement = {**event, "event_id": "$supplement", "body": "additional input", "control": True,
@@ -87,6 +88,7 @@ class StateTests(unittest.TestCase):
             bridge.journal = Journal(Path(temporary) / "journal.json")
             bridge.controls, bridge.stop, bridge.pending_requests = queue.Queue(), threading.Event(), {}
             bridge.reply, bridge.execution_status = Mock(), Mock()
+            bridge.matrix = Mock()
             bridge.direct_member = Mock(return_value=True)
             event = {"event_id": "$original", "room_id": "!dm", "sender": "@human:test", "body": "original", "kind": "text"}
             bridge.journal.ingest([event], "cursor")
@@ -202,7 +204,7 @@ class StateTests(unittest.TestCase):
             bridge.workspace = Path(temporary)
             bridge.journal = Journal(Path(temporary) / "journal.json")
             bridge.matrix = Mock()
-            bridge.matrix.send_text.side_effect = [
+            bridge.matrix.send_content.side_effect = [
                 OSError("temporary delivery failure"),
                 "$reply",
             ]
@@ -225,8 +227,8 @@ class StateTests(unittest.TestCase):
             bridge.run_turn.assert_called_once()
             self.assertEqual(record["status"], "completed")
             self.assertEqual(
-                bridge.matrix.send_text.call_args_list[0],
-                bridge.matrix.send_text.call_args_list[1],
+                bridge.matrix.send_content.call_args_list[0],
+                bridge.matrix.send_content.call_args_list[1],
             )
 
     def test_control_is_scoped_to_room_and_requesting_human(self):

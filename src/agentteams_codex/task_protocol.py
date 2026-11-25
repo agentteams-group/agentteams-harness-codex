@@ -38,6 +38,8 @@ def prepare_turn(plugin, role, event, call=None):
         if prepared.get("ok") is False:
             raise ValueError("Task preparation is unavailable; no native model was started")
         context.update(prepared)
+        if meta.get("agent_matrix_user_id"):
+            context["actor"] = meta["agent_matrix_user_id"]
     elif event["event_id"].startswith("$"):
         frames = event.get("matrix_input_sources")
         if frames is None:
@@ -46,7 +48,7 @@ def prepare_turn(plugin, role, event, call=None):
         context["sources"] = receipt.creation_sources({"matrix_input_sources": frames})
     facts = []
     if context.get("fact"):
-        facts.append(context["fact"] + "\n" + json.dumps(context["context"], ensure_ascii=False))
+        facts.append(context["fact"] + "\n" + json.dumps(common(plugin, "task_context").model_context(context["context"]), ensure_ascii=False))
     if context["sources"]:
         facts.append("[Task input references]\n" + json.dumps([
             {key: source[key] for key in ("inputId", "eventId")} for source in context["sources"]]))
@@ -71,7 +73,16 @@ def task_response(arguments, context, plugin):
     result = outcome.get("result", outcome)
     if outcome.get("contextUpdate"):
         context.update(outcome["contextUpdate"])
-    content = [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]
+    # A validated terminal receipt closes this phase. Keep only its identity
+    # and disposition in native tool history, not a second full Task snapshot.
+    visible = result
+    if outcome.get("phaseComplete") is True and outcome.get("receiptId"):
+        task = result.get("task") or {}
+        visible = {"task": {key: task[key] for key in ("id", "status", "submissionId", "completionId", "planId") if key in task},
+                   "receiptId": outcome["receiptId"]}
+        if result.get("notification"):
+            visible["notification"] = result["notification"]
+    content = [{"type": "text", "text": json.dumps(visible, ensure_ascii=False)}]
     if outcome.get("fact"):
         content.append({"type": "text", "text": outcome["fact"]})
     # A refresh remains fenced until a native User message is checkpointed.

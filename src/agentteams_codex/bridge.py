@@ -24,6 +24,7 @@ from .input_barrier import InputBarrier, ENV as BARRIER_ENV
 from .admission import Scope as NativeScope, ENV as SCOPE_ENV, COMMAND_ENV as ADMISSION_COMMAND_ENV
 from .managed_matrix import ManagedMatrix
 from .tool_hook import require_hooks
+from .tool_progress import ToolProgress, run_id
 from .config import managed_worker, prepare, read_runtime, sync_assigned_skills, _role
 from .task_protocol import CONTEXT_ENV, prepare_turn, delivery_context, common
 from .native_telemetry import trace_attributes
@@ -238,8 +239,20 @@ class Bridge:
         def bind(cp):
             actual = recovery.checkpoint(task_id, team, cp)["execution"]
             confirm_bound(actual, execution, "codex", cp)
+        identity = run_id({'recovery': {'team_id': team, 'task_id': task_id, 'generation': execution['generation']}})
+        content = {"org.agentteams.progress_only": True, "org.agentteams.run_id": identity}
+        task = recovery.current(task_id, team)
+        if task and task.get("task_plan_id") and task.get("submission_id") and task.get("status") in {"submitted", "completed"}:
+            # Keep the exact report as the durable delivery body; present the
+            # verified phase receipt instead of repeating the report in chat.
+            result = task.get("result_status")
+            title = ("结果需要修正，已提交任务系统处理" if result == "REVISION_NEEDED" else
+                     "执行受阻，已提交任务系统处理" if result in {"BLOCKED", "INTERRUPTED"} else
+                     "节点结果已保存，后续推进由任务系统接管")
+            content["org.agentteams.run"] = {"version": "1", "run_id": identity,
+                                              "blocks": [{"type": "text", "text": title}]}
         return publish_raw_saved(self.matrix, room, text, execution["checkpoint"], self.user_id, bind,
-            content={"org.agentteams.progress_only": True}, legacy_transaction_id=matrix_transaction_id)
+            content=content, legacy_transaction_id=matrix_transaction_id)
 
     def recover_tasks(self, only_task=None):
         from task_recovery import Recovery, enabled
@@ -290,7 +303,7 @@ class Bridge:
                      "recovery": {"task_id": task_id, "team_id": team, "thread_id": None, "spec": claimed["spec"],
                                   **{k: execution[k] for k in ("instance_id", "generation", "process_id")}}}
             if task.get("task_plan_id"):
-                event["_task_protocol_meta"] = {"teamharness_coordination": {
+                event["_task_protocol_meta"] = {"agent_matrix_user_id": self.user_id, "teamharness_coordination": {
                     "kind": "task_assigned", "task_id": task_id, "main_task_id": task.get("main_task_id", ""),
                     "project_id": task.get("project_id", ""), "delivery_id": task.get("notifyTxn")}}
             # Supersede only the same Task's local admission. Other Matrix
@@ -704,7 +717,7 @@ class Bridge:
                     self.managed.remember_message(event, thread_id)
             recovered = completed_answer(thread, event["event_id"], terminal_only=bool(event.get("message_execution") or event.get("recovery")))
             if recovered is not None:
-                return recovered
+                return native_scope.presentation() or record.get("task_presentation") or recovered
             if record.get("status") == "running" and not (event.get("recovery") or event.get("message_execution")):
                 # The original start may have reached the model before a crash.
                 # Do not repeat shell/MCP side effects when history is uncertain.
@@ -733,7 +746,7 @@ class Bridge:
             deadline = time.monotonic() + int(
                 os.getenv("CODEX_TASK_TIMEOUT_SECONDS", "3600")
             )
-            last_progress = {}
+            tool_progress = ToolProgress(self.matrix, event, run_id(event))
             try:
                 while not self.stop.is_set():
                     input_barrier.serve(client, thread_id, turn["id"],
@@ -938,18 +951,11 @@ class Bridge:
                                         event_id=event["event_id"], room_id=event["room_id"],
                                         tool_type=item.get("type"), item_id=item.get("id"), status="failed" if failed else item.get("status"),
                                         error=item.get("error") or ((item.get("aggregatedOutput") or "")[:4096] if failed else None), exit_code=item.get("exitCode"))
-                    if show_tools and method == "item/started":
-                        kind = params.get("item", {}).get("type", "work")
-                        if (
-                            kind in {"commandExecution", "mcpToolCall", "fileChange"}
-                            and time.monotonic() - last_progress.get(kind, 0) > 10
-                        ):
-                            self.reply(
-                                event,
-                                f"Codex is working: {kind}.",
-                                f"progress:{params.get('item', {}).get('id')}",
-                            )
-                            last_progress[kind] = time.monotonic()
+                    if method in {"item/started", "item/completed"} and (show_tools or params.get("item", {}).get("type") in {"reasoning", "agentMessage"}):
+                        try:
+                            tool_progress.update(method, params.get("item", {}))
+                        except Exception as error:
+                            trace_event("progress.delivery_failed", event_id=event["event_id"], error_type=type(error).__name__)
                     if (
                         method == "turn/completed"
                         and params.get("turn", {}).get("id") == turn["id"]
@@ -958,6 +964,11 @@ class Bridge:
                         native_scope.require_admitted()
                         trace_event("inference.end", event_id=event["event_id"], status=terminal.get("status"), error=terminal.get("error"), layer="agent_turn")
                         if terminal["status"] == "completed":
+                            presentation = native_scope.presentation()
+                            if presentation is not None:
+                                record["task_presentation"] = presentation
+                                self.journal.save()
+                                return presentation
                             return (
                                 "\n".join(filter(None, answers))
                                 or "Codex completed the task."
@@ -1074,17 +1085,18 @@ class Bridge:
             self.journal.save()
             return
         source = source_agent_reply_user_id(event, self.agent_ids, self.user_id)
-        message_id = self.matrix.send_text(
-            event["room_id"],
-            record["answer"],
-            event_id,
-            f"codex:{event_id}:reply",
-            reply_mention_user_ids(
-                event, record["answer"], self.agent_ids, self.user_id
-            ),
-            bool(source),
-            **({"progress_only": True} if event.get("coordination_session") else {}),
-        )
+        content = {"msgtype": "m.text", "body": record["answer"],
+                   "m.relates_to": {"m.in_reply_to": {"event_id": event_id}},
+                   "org.agentteams.run_id": run_id(event)}
+        if event.get("coordination_session"):
+            content["org.agentteams.progress_only"] = True
+        else:
+            mentions = reply_mention_user_ids(event, record["answer"], self.agent_ids, self.user_id)
+            if mentions:
+                content["m.mentions"] = {"user_ids": mentions}
+        if source:
+            content["com.agentteams.auto_source_mention"] = True
+        message_id = self.matrix.send_content(event["room_id"], content, f"codex:{event_id}:reply")
         if record.get("direct"):
             self.execution_status(event, "stopped" if record.get("stopped") else "failed" if record.get("error") else "completed", message_id)
         send_output_paths(

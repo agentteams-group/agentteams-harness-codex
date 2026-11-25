@@ -29,3 +29,16 @@ Remaining gates before certification:
   execute the frozen 20 scenarios and cross-Harness acceptance runs.
 
 No native fixture or source patch is a substitute for these gates.
+
+
+## Natural Task handoff and minimal context
+
+Use the shared `task_context.model_context` projection for prepared Task evidence. Keep original requirements once, and pass versioned file references instead of previews and duplicate report bodies. The actual associated Skill contents remain available in native instructions.
+
+A validated terminal Task result closes its native phase. Retain its identity/status and Task fact in the actual tool history; append confirmed sender-owned dispatch receipts through the SDK's fixed no-inference receipt callback. Preserve these receipts when restoring an admission scope. Do not dispatch a new model turn to explain them or acknowledge receipt in Matrix.
+
+Keep business presentation separate from internal facts. Source intake returns one natural acceptance linking the Task room; full planning occurs there. Structured tool blocks expose real names, arguments, results, call IDs and status and coalesce with the final turn. A saved Task report uses the same run identity and retains the true report bytes; successful control receipts do not create an additional conversational answer. Recovery uses the retained presentation and exact pending delivery.
+
+Validate native persisted receipts and post-submit generation counts, not just sidecar state. Also verify no progress blocks or unaddressed peer messages enter another worker's model context. Local fixtures, deployment, mixed Task execution and full admission certification are separate proof layers. The Core integration guide's Task handoff section records the cross-Harness contract and remaining runtime acceptance gates.
+
+The matched Core contract is pinned to `f08cd8291c4004479660addb16fc7ecd7d08c591` ([Core PR #1725](https://github.com/agentscope-ai/AgentTeams/pull/1725)); build the Controller/CLI and shared assets from that same revision. Local mixed normal and rework Tasks are separate from full admission certification.

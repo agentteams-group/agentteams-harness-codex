@@ -129,6 +129,14 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
         if not destination.exists():
             destination.symlink_to(skill.parent)
     sync_assigned_skills(config, home, plugin, selected_ids)
+    assigned = []
+    for name in sorted(set(desired.get("skills", [])) - selected_ids):
+        source = user_skills / name
+        if (source.is_symlink() and source.resolve().is_relative_to((home.parent / "skills").resolve())
+                and (source / "SKILL.md").is_file()):
+            assigned.append(source / "SKILL.md")
+        elif any((task_scope or {}).get(key) for key in ("execution", "planning", "review", "completion")):
+            raise ValueError(f"Assigned Skill unavailable for Task work: {name}")
     context = [
         (
             (plugin / "prompts/team/TEAMS.md").read_text()
@@ -160,6 +168,10 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
     for field, value in inline.items():
         if value:
             context.append(f"{field}:\n{value}")
+    # Explicit Worker associations are role contracts, including in Task phases
+    # where the native policy deliberately disallows shell/file tools.
+    context.extend(f"Assigned Skill {skill.parent.name} (already loaded; follow this contract):\n{skill.read_text()}"
+                   for skill in assigned)
     model_config = desired.get("model", {})
     model = model_config.get("model") or os.getenv("CODEX_MODEL", "gpt-5.3-codex")
     lines = [

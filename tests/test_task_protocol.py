@@ -34,7 +34,7 @@ def test_verified_prepare_receipt_sets_only_the_current_turn_working_directory(t
                 'fact': 'Your assignment is acknowledged.', 'context': {'outputDirectory': str(output)}}
     prepare_event = Mock(return_value=prepared)
     modules = {'task_receipt': SimpleNamespace(), 'task_cli': SimpleNamespace(run=Mock()),
-               'task_context': SimpleNamespace(prepare_event=prepare_event)}
+               'task_context': SimpleNamespace(prepare_event=prepare_event, model_context=lambda value:value)}
     event = {'event_id': '$native', 'room_id': '!room:test', 'sender': '@leader:test',
              '_task_protocol_meta': {'teamharness_coordination': notification}}
     with patch.object(task_protocol, 'common', side_effect=lambda _, name: modules[name]):
@@ -269,3 +269,36 @@ def test_coordination_admission_sends_the_raw_matrix_id_over_http(tmp_path, monk
                              'process_id': 'own-fixture-process'}]
     finally:
         server.shutdown(); server.server_close(); thread.join()
+
+
+def test_finalized_task_result_returns_receipt_not_full_snapshot(tmp_path):
+    result={'task':{'id':'exec-one','status':'completed','spec':'large original repeated',
+                    'candidate':{'report':'large report','artifacts':[{'artifactId':'file-one'}]},'submissionId':'s1'},
+            'notification':{'status':'queued','recipient':'tester','eventId':'event'}}
+    outcome={'result':result,'fact':'[Task system receipt] Submission s1 saved; next worker queued.',
+             'receiptId':'receipt-one','phaseComplete':True}
+    with patch.object(task_protocol,'common',return_value=SimpleNamespace(invoke=Mock(return_value=outcome))):
+        response=task_protocol.task_response({'action':'submit','taskId':'exec-one'}, {'role':'worker'},tmp_path)
+    text=response['content'][0]['text']
+    assert 'large original' not in text and 'large report' not in text
+    assert json.loads(text)['task']=={'id':'exec-one','status':'completed','submissionId':'s1'}
+    assert json.loads(text)['notification']==result['notification']
+    assert response['content'][1]['text']==outcome['fact']
+    assert response['_meta']['agentteams.task']['receiptId']=='receipt-one'
+
+
+def test_native_presentation_is_saved_separately_from_canonical_receipt(tmp_path):
+    from agentteams_codex.admission import Scope, phase_complete, ENV
+    context={'role':'leader','sourceEvent':'$source'}
+    scope=Scope(tmp_path,tmp_path,context)
+    with patch.dict(os.environ,{ENV:str(scope.path)}):
+        phase_complete({'phaseComplete':True,'receiptId':'r','fact':'[Task system receipt] saved',
+                        'displayText':'已受理。','extraReceipts':[{'receiptId':'sent','fact':'Already notified downstream.'}]},context)
+    saved=json.loads(scope.path.read_text())['complete']
+    assert saved['fact']=='[Task system receipt] saved'
+    assert saved['receiptId']=='r'
+    assert scope.presentation()=='已受理。'
+    restored=Scope(tmp_path,tmp_path,context)
+    assert restored.presentation()=='已受理。'
+    assert restored.frame['complete']['fact']==saved['fact']
+    assert restored.frame['dispatch_receipts']==[{'receiptId':'sent','fact':'Already notified downstream.'}]

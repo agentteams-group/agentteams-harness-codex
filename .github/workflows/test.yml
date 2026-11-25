@@ -45,5 +45,16 @@ jobs:
             docker run --rm --network none --entrypoint /opt/venv/bin/python3 -v "${{ github.workspace }}/harness/tests:/tests:ro" \
               codex-harness-test /tests/native_tool_smoke.py "$decision"
           done
+          for mode in async failure handler-error; do
+            docker run --rm --network none --entrypoint /opt/venv/bin/python3 \
+              -e AT_SOURCE=/opt/agentteams \
+              -v "${{ github.workspace }}/harness/tests:/tests:ro" \
+              codex-harness-test /tests/native_tool_returns_smoke.py "$mode"
+          done
+          docker run --rm --network none --entrypoint /opt/venv/bin/python3 \
+            -e AT_SOURCE=/opt/agentteams \
+            -e 'CODEX_NATIVE_COMMAND=["codex-app-server"]' \
+            -v "${{ github.workspace }}/harness/tests:/tests:ro" \
+            codex-harness-test /tests/native_admission_smoke.py
       - name: Verify native stop and supplement against App Server
         run: make -C harness direct-control-smoke IMAGE=codex-harness-test VERSION=latest

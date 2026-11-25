@@ -14,6 +14,7 @@ from matrix_bridge import (changed_outbox_files, reply_mention_user_ids, snapsho
 from task_recovery import Recovery, RecoveryConflict
 from worker_matrix_delivery import confirm_bound
 from worker_matrix_raw import RawWorkerSync, publish_raw_saved, raw_room_history, require_unencrypted_room
+from .tool_progress import run_id
 from worker_sessions import WorkerSessions
 from worker_matrix_state import WorkerMatrix, matrix_event_key
 
@@ -314,9 +315,24 @@ class ManagedMatrix:
             confirm_bound(saved["execution"], identity, "codex", next_cp)
         room = event["room_id"]
         text = claim["saved_result"]
-        content = {"m.relates_to": {"m.in_reply_to": {"event_id": event["event_id"]}}}
+        content = {"m.relates_to": {"m.in_reply_to": {"event_id": event["event_id"]}},
+                   "org.agentteams.run_id": run_id(event)}
+        if isinstance(record.get("task_presentation"), str):
+            # The exact canonical body still fences delivery/recovery. Chat
+            # shows the business result instead of the internal receipt.
+            content["org.agentteams.progress_only"] = True
+            content["org.agentteams.run"] = {"version": "1", "run_id": run_id(event),
+                "blocks": [{"type": "text", "text": record["task_presentation"]}]}
         source = source_agent_reply_user_id(event, self.bridge.agent_ids, self.bridge.user_id)
         mentions = reply_mention_user_ids(event, text, self.bridge.agent_ids, self.bridge.user_id)
+        # The registered Manager is an allowed private sender, but is not a
+        # member of the execution Team roster. Direct replies still address it.
+        sender = event.get("sender")
+        allowed = self.bridge.config.get("matrix", {}).get("transport", {}).get("dm", {}).get("allowFrom", [])
+        if (not source and self.bridge.rooms.get(room) == "personal" and sender != self.bridge.user_id
+                and sender in allowed and event.get("auto_source_mention") is not True):
+            source = sender
+            mentions = sorted(set(mentions) | {sender})
         if source:
             content["com.agentteams.auto_source_mention"] = True
         if event.get("coordination_session"):
