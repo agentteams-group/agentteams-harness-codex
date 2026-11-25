@@ -85,13 +85,10 @@ class ManagedTests(unittest.TestCase):
             'execution': {'checkpoint': {}}}
         with patch('agentteams_codex.managed_matrix.publish_raw_saved', return_value='$quiet') as send:
             managed.message_turn({'event': event, 'task_presentation': ''})
-        self.assertEqual(send.call_args.args[2], '[Task system receipt] execution plan saved')
-        content = send.call_args.kwargs['content']
-        self.assertTrue(content['org.agentteams.progress_only'])
-        self.assertEqual(content['org.agentteams.run']['blocks'],
-                         [{'type': 'error', 'kind': 'quiet', 'title': '已处理'}])
-        self.assertNotIn('m.mentions', content)
-        managed.matrix.message_delivered.assert_called_once_with({}, '$quiet')
+        send.assert_not_called()
+        managed.matrix.message_complete.assert_called_once_with({})
+        managed.matrix.message_delivered.assert_not_called()
+        self.assertEqual(managed.bridge.journal.save.call_count, 1)
 
     def test_manager_invite_uses_projected_direct_sender_allowlist(self):
         managed = ManagedMatrix.__new__(ManagedMatrix)
@@ -130,8 +127,12 @@ class ManagedTests(unittest.TestCase):
             with patch("task_coordination.notification", return_value={"text": "Task assignment", "session_id": "coordination-task:T:assign"}) as verified:
                 self.assertEqual(matrix.classify(room, packet), ("task_notification", "T"))
                 verified.assert_called_once()
+            typed = {**packet, "type": "org.agentteams.coordination"}
+            with patch("task_coordination.notification", return_value={"text": "Plan the admitted task", "session_id": "coordination-handoff:signed"}):
+                self.assertEqual(matrix.classify(room, typed), ("message", None))
             with patch("task_coordination.notification", side_effect=ValueError("wrong sender")):
                 self.assertIsNone(matrix.classify(room, packet))
+                self.assertIsNone(matrix.classify(room, typed))
 
     def test_media_stages_stable_bytes_and_requires_a_confirmed_matrix_event(self):
         event = {"room_id": "!room:test", "sender": "@manager:test", "event_id": "$source"}

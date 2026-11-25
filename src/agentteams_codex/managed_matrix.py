@@ -30,7 +30,8 @@ class ManagedMatrix:
         self.joined = set()
         self.available = set()
         self.scan_confirmed = False
-        self.raw = RawWorkerSync(self.matrix, bridge.matrix, bridge.user_id, self.classify, self.observe)
+        self.raw = RawWorkerSync(self.matrix, bridge.matrix, bridge.user_id, self.classify, self.observe,
+                                 event_types=("m.room.message", "org.agentteams.coordination"))
 
     def observe(self, payload):
         bridge = self.bridge
@@ -309,6 +310,13 @@ class ManagedMatrix:
             record["status"] = "completed"
             self.bridge.journal.save()
             return
+        if record.get("task_presentation") == "":
+            # The canonical receipt stays in durable execution/native history.
+            # A silent control phase produces no Matrix chat event at all.
+            matrix.message_complete(identity)
+            record["status"] = "completed"
+            self.bridge.journal.save()
+            return
         cp = claim["execution"]["checkpoint"]
         def bind(next_cp):
             saved = matrix.message_checkpoint(identity, next_cp)
@@ -318,13 +326,11 @@ class ManagedMatrix:
         content = {"m.relates_to": {"m.in_reply_to": {"event_id": event["event_id"]}},
                    "org.agentteams.run_id": run_id(event)}
         if isinstance(record.get("task_presentation"), str):
-            # The exact canonical body still fences delivery/recovery. Chat
-            # shows the business result instead of the internal receipt.
+            # Business replies use their durable business body; control-only
+            # phases have completed without a Matrix message.
             content["org.agentteams.progress_only"] = True
             content["org.agentteams.run"] = {"version": "1", "run_id": run_id(event),
-                "blocks": ([{"type": "text", "text": record["task_presentation"]}]
-                           if record["task_presentation"].strip() else
-                           [{"type": "error", "kind": "quiet", "title": "已处理"}])}
+                "blocks": [{"type": "text", "text": record["task_presentation"]}]}
         source = source_agent_reply_user_id(event, self.bridge.agent_ids, self.bridge.user_id)
         mentions = reply_mention_user_ids(event, text, self.bridge.agent_ids, self.bridge.user_id)
         # The registered Manager is an allowed private sender, but is not a

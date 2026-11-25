@@ -18,6 +18,100 @@ from agentteams_codex.bridge import Bridge, Journal
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_submitted_task_displays_its_saved_business_result_in_the_same_run(self):
+        for status, summary in [
+            ('SUCCESS', '已生成 quiet-result.txt，逐字节验证通过。'),
+            ('REVISION_NEEDED', '检查发现内容与要求不符，需修正后复审。'),
+            ('BLOCKED', '输入文件缺失，当前无法执行验证。'),
+        ]:
+            with self.subTest(status=status):
+                self.recovery.current.return_value = {
+                    **self.task, 'status': 'submitted', 'task_plan_id': 'plan',
+                    'submission_id': 'submission', 'result_status': status}
+                with patch('agentteams_codex.bridge.publish_raw_saved', return_value='$result') as send:
+                    self.bridge.deliver_task(self.recovery, 't1', 'team', '!task:test',
+                                             self.task['execution'], summary)
+                self.assertEqual(send.call_args.args[2], summary)
+                content = send.call_args.kwargs['content']
+                self.assertEqual(content['org.agentteams.run']['blocks'],
+                                 [{'type': 'text', 'text': summary}])
+                self.assertEqual(content['org.agentteams.run']['run_id'],
+                                 content['org.agentteams.run_id'])
+
+    def test_stage_delivery_precedes_handoff_context_injection_without_a_model_call(self):
+        from types import SimpleNamespace
+        order = []
+        outgoing = {'task': {'id': 't1', 'submissionId': 's1'}, 'notification': {'status': 'queued', 'eventId': 'n1'}}
+        scope_path = Path(self.tmp.name) / 'scope.json'
+        scope_path.write_text(json.dumps({'outgoing': outgoing}))
+        scope = SimpleNamespace(path=scope_path, reply=lambda: '业务结论')
+        self.bridge.plugin = Path(self.tmp.name)
+        self.bridge.persist_codex = Mock(side_effect=lambda **kw: order.append('persist'))
+        self.bridge.deliver_task = Mock(side_effect=lambda *a: order.append('publish-result') or '$result')
+        self.recovery.prepare_reply.return_value = ({'execution': {'checkpoint': {'reply_txn': 'one'}}}, '业务结论')
+        self.recovery.delivered.side_effect = lambda *a: order.append('ack-result')
+        receipt = {'receiptId': 'sent-one', 'fact': '已向下游发送真实交接，不需要回复。'}
+        native = SimpleNamespace(controller_json=Mock(), dispatched_receipts=Mock(side_effect=lambda *a, **kw: order.append('confirm-handoff') or [receipt]))
+        client = Mock()
+        client.request.side_effect = lambda *a: order.append('inject')
+        with patch('agentteams_codex.bridge.common', return_value=native), patch('agentteams_codex.bridge.saved_message', side_effect=[None, 'digest']):
+            self.bridge.finish_task_delivery(client, {'event_id': '$source', 'recovery': {'task_id': 't1', 'team_id': 'team'}, 'room_id': '!task:test'}, {}, scope, 'native-thread')
+        self.assertLess(order.index('publish-result'), order.index('confirm-handoff'))
+        self.assertLess(order.index('ack-result'), order.index('inject'))
+        client.start.assert_not_called()
+        self.assertEqual(client.request.call_args.args[0], 'thread/inject_items')
+        self.assertEqual(json.loads(scope_path.read_text())['observed']['sent-one']['rows'], ['digest'])
+
+    def test_late_handoff_receipt_survives_restart_and_injects_without_inference(self):
+        from types import SimpleNamespace
+        thread = '445a4b30-92ca-4fd8-91e4-000000000002'
+        rollout = self.bridge.home / 'sessions' / ('rollout-test-' + thread + '.jsonl')
+        rollout.parent.mkdir()
+        rollout.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': thread}}) + '\n')
+        pending = {'thread_id': thread, 'scope_file': str(self.bridge.home / 'missing-scope.json'), 'observed': {},
+                   'outgoing': {'task': {'id': 't1', 'submissionId': 's1'}, 'notification': {'status': 'queued', 'eventId': 'n1'}}}
+        self.bridge.workspace = self.bridge.home
+        self.bridge.config['member'] = {'role': 'worker', 'runtime': 'codex'}
+        self.bridge.plugin = self.bridge.home
+        self.bridge.persist_codex = Mock()
+        self.bridge.journal.data['handoff_context'] = {'$source': pending}
+        self.bridge.journal.save()
+        native = SimpleNamespace(controller_json=Mock(), dispatched_receipts=Mock(return_value=[]))
+        with patch('agentteams_codex.bridge.common', return_value=native), patch('agentteams_codex.bridge.Client') as factory:
+            self.bridge.flush_handoff_context()
+            factory.assert_not_called()
+            self.assertIn('$source', self.bridge.journal.data['handoff_context'])
+            self.bridge.journal = Journal(self.bridge.journal.path)
+            receipt = {'receiptId': json.dumps(['dispatch', 'n1', 'matrix:$sent']), 'fact': 'Confirmed actual downstream notification.'}
+            native.dispatched_receipts.return_value = [receipt]
+            client = factory.return_value.__enter__.return_value
+            def persist_native(method, request):
+                if method == 'thread/inject_items':
+                    with rollout.open('a') as stream:
+                        stream.write(json.dumps({'type': 'response_item', 'payload': request['items'][0]}) + '\n')
+                return {}
+            client.request.side_effect = persist_native
+            self.bridge.flush_handoff_context()
+            self.assertEqual(self.bridge.journal.data['handoff_context'], {})
+            self.assertEqual([call.args[0] for call in client.request.call_args_list], ['thread/resume', 'thread/inject_items'])
+            client.start.assert_not_called()
+            self.bridge.run_turn.assert_not_called()
+            self.bridge.journal = Journal(self.bridge.journal.path)
+            self.bridge.flush_handoff_context()
+            self.assertEqual(client.request.call_count, 2)
+
+    def test_confirmed_inner_delivery_does_not_repeat_outer_reply_preparation(self):
+        event = {'room_id': '!task:test', 'event_id': '$source', 'recovery': {
+            'task_id': 't1', 'team_id': 'team', 'spec': 'requirements',
+            **{k: self.task['execution'][k] for k in ('instance_id', 'generation', 'process_id')}}}
+        record = {'event': event}
+        self.bridge.persist_codex = Mock()
+        self.bridge.run_turn.side_effect = lambda *a: record.update(task_result_delivered='$business-result') or '业务结果'
+        with patch('agentteams_codex.bridge.task_thread', return_value=('existing-thread', self.view)):
+            self.bridge.process_recovered_task('$source', record)
+        self.recovery.prepare_reply.assert_not_called()
+        self.assertEqual(record['status'], 'completed')
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

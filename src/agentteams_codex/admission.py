@@ -52,6 +52,8 @@ class Scope:
             if prior.get('context', {}).get('sourceEvent') == context['sourceEvent'] and prior.get('complete'):
                 self.frame['complete'] = prior['complete']
                 self.frame['dispatch_receipts'] = prior.get('dispatch_receipts', [])
+                if prior.get('outgoing'):
+                    self.frame['outgoing'] = prior['outgoing']
             write(self.path, self.frame)
 
     def presentation(self):
@@ -130,6 +132,12 @@ def phase_complete(outcome, context):
         if isinstance(outcome.get('displayText'), str):
             frame['complete']['displayText'] = outcome['displayText']
         frame['dispatch_receipts'] = outcome.get('extraReceipts', [])
+        result = outcome.get('result') or {}
+        task = result.get('task') or {}
+        if task.get('submissionId') and (result.get('assignments') or result.get('notification')):
+            frame['outgoing'] = {'task': {key: task[key] for key in ('id', 'mainTaskId', 'submissionId') if key in task},
+                                 'assignments': result.get('assignments', []),
+                                 'notification': result.get('notification') or {}}
         write(path, frame)
 
 
