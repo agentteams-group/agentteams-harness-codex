@@ -45,4 +45,7 @@ if [ "${CODEX_AUTH_MODE:-gateway}" = chatgpt ] && { [ -z "${AGENTTEAMS_CONTROLLE
     chmod 600 "${CODEX_HOME}/auth.json"
 fi
 export PYTHONPATH="/opt/agentteams/scripts/lib:/opt/agentteams/transport${PYTHONPATH:+:${PYTHONPATH}}"
+if [ -n "${AGENTTEAMS_STORAGE_PREFIX:-}" ]; then
+    python3 /opt/agentteams/scripts/lib/harness_health.py --runtime codex --member "${AGENTTEAMS_WORKER_NAME}" --parent "$$" &
+fi
 exec /opt/venv/bin/agentteams-codex
