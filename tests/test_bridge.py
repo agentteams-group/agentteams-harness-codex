@@ -29,6 +29,31 @@ from agentteams_codex.client import CodexError
 
 
 class StateTests(unittest.TestCase):
+    def test_recovered_quiet_phase_does_not_restore_internal_receipt_as_answer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            bridge = Bridge.__new__(Bridge)
+            bridge.workspace = bridge.home = bridge.plugin = Path(temporary)
+            bridge.runtime_path = Path(temporary) / 'runtime.yaml'
+            bridge.runtime_path.write_text('member:\n  runtime: codex\n')
+            bridge.config = {}
+            bridge.journal = Journal(Path(temporary) / 'journal.json')
+            bridge.matrix = Mock()
+            event = {'event_id': '$planning', 'room_id': '!task', 'sender': '@human:test',
+                     'body': 'plan the task', 'kind': 'text'}
+            bridge.journal.ingest([event], 'cursor')
+            with patch('agentteams_codex.bridge.prepare', return_value=('model', 'instructions')), \
+                 patch('agentteams_codex.bridge.prepare_turn', return_value=(
+                     {'role': 'leader', 'sources': [], 'sourceEvent': '$planning'}, '', None)), \
+                 patch('agentteams_codex.bridge.NativeScope') as scope, \
+                 patch('agentteams_codex.bridge.completed_answer', return_value='[Task system receipt] saved'), \
+                 patch('agentteams_codex.bridge.Client') as factory:
+                scope.return_value.presentation.return_value = ''
+                client = factory.return_value.__enter__.return_value
+                client.open_thread.return_value = {'id': 'thread-1', 'turns': []}
+                self.assertEqual(bridge.run_turn(event, bridge.journal.data['events']['$planning']), '')
+                self.assertEqual(Journal(bridge.journal.path).data['events']['$planning']['task_presentation'], '')
+                client.start.assert_not_called()
+
     def test_read_checkpoint_requires_native_user_input_and_a_successful_snapshot(self):
         bridge = Bridge.__new__(Bridge)
         bridge.journal = Mock()

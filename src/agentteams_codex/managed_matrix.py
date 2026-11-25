@@ -322,7 +322,9 @@ class ManagedMatrix:
             # shows the business result instead of the internal receipt.
             content["org.agentteams.progress_only"] = True
             content["org.agentteams.run"] = {"version": "1", "run_id": run_id(event),
-                "blocks": [{"type": "text", "text": record["task_presentation"]}]}
+                "blocks": ([{"type": "text", "text": record["task_presentation"]}]
+                           if record["task_presentation"].strip() else
+                           [{"type": "error", "kind": "quiet", "title": "已处理"}])}
         source = source_agent_reply_user_id(event, self.bridge.agent_ids, self.bridge.user_id)
         mentions = reply_mention_user_ids(event, text, self.bridge.agent_ids, self.bridge.user_id)
         # The registered Manager is an allowed private sender, but is not a

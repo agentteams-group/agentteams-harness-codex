@@ -39,6 +39,8 @@ A validated terminal Task result closes its native phase. Retain its identity/st
 
 Keep business presentation separate from internal facts. Source intake returns one natural acceptance linking the Task room; full planning occurs there. Structured tool blocks expose real names, arguments, results, call IDs and status and coalesce with the final turn. A saved Task report uses the same run identity and retains the true report bytes; successful control receipts do not create an additional conversational answer. Recovery uses the retained presentation and exact pending delivery.
 
+A verified completed phase without business presentation ends quietly. Preserve the empty presentation through scope restore and native answer recovery; do not fall back to the internal receipt. Publish the shared `kind=quiet` run ending with the same RunId so tools remain available without a receipt bubble or another model turn.
+
 Validate native persisted receipts and post-submit generation counts, not just sidecar state. Also verify no progress blocks or unaddressed peer messages enter another worker's model context. Local fixtures, deployment, mixed Task execution and full admission certification are separate proof layers. The Core integration guide's Task handoff section records the cross-Harness contract and remaining runtime acceptance gates.
 
 The matched Core contract is pinned to `f08cd8291c4004479660addb16fc7ecd7d08c591` ([Core PR #1725](https://github.com/agentscope-ai/AgentTeams/pull/1725)); build the Controller/CLI and shared assets from that same revision. Local mixed normal and rework Tasks are separate from full admission certification.

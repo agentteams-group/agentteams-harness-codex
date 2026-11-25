@@ -23,6 +23,24 @@ def hook(event='PreToolUse', name='mcp__teamharness__task'):
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_terminal_phase_without_business_text_remains_quiet_after_restore(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = frame()['context']
+            scope = admission.Scope(root / '.codex', root / 'plugin', context)
+            self.assertIsNone(scope.presentation())
+            with patch.dict(os.environ, {admission.ENV: str(scope.path)}):
+                admission.phase_complete({'phaseComplete': True, 'receiptId': 'planned',
+                    'fact': '[Task system receipt] execution plan saved'}, context)
+            restored = admission.Scope(root / '.codex', root / 'plugin', context)
+            self.assertEqual(restored.presentation(), '')
+            self.assertEqual(json.loads(restored.path.read_text())['complete']['fact'],
+                             '[Task system receipt] execution plan saved')
+            with patch.dict(os.environ, {admission.ENV: str(scope.path)}):
+                admission.phase_complete({'phaseComplete': True, 'receiptId': 'submitted',
+                    'fact': 'submission saved', 'displayText': '已生成 result.json，检查通过。'}, context)
+            self.assertEqual(scope.presentation(), '已生成 result.json，检查通过。')
+
     def test_only_private_factory_registration_delegates(self):
         from task_operation import tool_policy
         calls = []

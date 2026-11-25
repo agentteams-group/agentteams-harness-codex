@@ -55,7 +55,8 @@ class Scope:
             write(self.path, self.frame)
 
     def presentation(self):
-        return json.loads(self.path.read_text()).get('complete', {}).get('displayText')
+        complete = json.loads(self.path.read_text()).get('complete')
+        return complete.get('displayText', '') if complete else None
 
     def require_admitted(self):
         # The pinned SDK reports unexpected task errors as TurnComplete. Use

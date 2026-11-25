@@ -72,6 +72,27 @@ class ManagedTests(unittest.TestCase):
         self.assertEqual(content['org.agentteams.run']['blocks'][0]['text'],"已受理，接下来在任务房间处理。")
         self.assertTrue(content['org.agentteams.progress_only'])
 
+    def test_quiet_task_presentation_closes_the_run_without_a_receipt_bubble(self):
+        managed = ManagedMatrix.__new__(ManagedMatrix)
+        event = {'room_id': '!task:test', 'event_id': '$planning', 'shared_key': 'key',
+                 'sender': '@human:test'}
+        managed.bridge = Mock(user_id='@leader:test', agent_ids={'@leader:test'},
+                              rooms={event['room_id']: 'team'}, config={})
+        managed.matrix = Mock()
+        managed.matrix.message.return_value = {'recovery': 'deliver'}
+        managed.matrix.message_claim.return_value = {'recovery': 'deliver', 'identity': {},
+            'saved_result': '[Task system receipt] execution plan saved',
+            'execution': {'checkpoint': {}}}
+        with patch('agentteams_codex.managed_matrix.publish_raw_saved', return_value='$quiet') as send:
+            managed.message_turn({'event': event, 'task_presentation': ''})
+        self.assertEqual(send.call_args.args[2], '[Task system receipt] execution plan saved')
+        content = send.call_args.kwargs['content']
+        self.assertTrue(content['org.agentteams.progress_only'])
+        self.assertEqual(content['org.agentteams.run']['blocks'],
+                         [{'type': 'error', 'kind': 'quiet', 'title': '已处理'}])
+        self.assertNotIn('m.mentions', content)
+        managed.matrix.message_delivered.assert_called_once_with({}, '$quiet')
+
     def test_manager_invite_uses_projected_direct_sender_allowlist(self):
         managed = ManagedMatrix.__new__(ManagedMatrix)
         managed.receipts = Mock()

@@ -717,7 +717,14 @@ class Bridge:
                     self.managed.remember_message(event, thread_id)
             recovered = completed_answer(thread, event["event_id"], terminal_only=bool(event.get("message_execution") or event.get("recovery")))
             if recovered is not None:
-                return native_scope.presentation() or record.get("task_presentation") or recovered
+                presentation = native_scope.presentation()
+                if presentation is None:
+                    presentation = record.get("task_presentation")
+                if presentation is not None:
+                    record["task_presentation"] = presentation
+                    self.journal.save()
+                    return presentation
+                return recovered
             if record.get("status") == "running" and not (event.get("recovery") or event.get("message_execution")):
                 # The original start may have reached the model before a crash.
                 # Do not repeat shell/MCP side effects when history is uncertain.
