@@ -52,4 +52,8 @@ RUN chmod +x /opt/agentteams/entrypoint.sh
 ENV PYTHONPATH=/opt/agentteams/scripts/lib:/opt/agentteams/transport \
     PATH=/opt/venv/bin:${PATH}
 EXPOSE 8088
+COPY health_adapter.py /opt/agentteams/health_adapter.py
+RUN printf '#!/bin/sh\nexec /opt/venv/bin/python /opt/agentteams/health_adapter.py "$@"\n' > /opt/agentteams/harness-health \
+    && chmod 0755 /opt/agentteams/harness-health
+
 ENTRYPOINT ["/usr/bin/tini", "--", "/opt/agentteams/entrypoint.sh"]
