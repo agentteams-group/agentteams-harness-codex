@@ -31,6 +31,8 @@ jobs:
       - name: Test the actual container Python and transport assets
         run: |
           docker build --build-context at=./at -t codex-harness-test ./harness
+          docker run --rm --entrypoint mc codex-harness-test --version
+          docker run --rm --user 65534:65534 --entrypoint mc codex-harness-test --version
           docker run --rm --entrypoint agt codex-harness-test worker report-ready --help
           docker run --rm --entrypoint /opt/venv/bin/python3 \
             -e AT_SOURCE=/opt/agentteams/transport \
