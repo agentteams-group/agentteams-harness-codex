@@ -256,11 +256,9 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
             raise ValueError(f"MCP server {name} requires url or command")
         if "approvals" in server:
             policy = server["approvals"]
-            if not isinstance(policy, dict) or policy.get("tools") != "*" or policy.get("mode") not in ("allow", "ask", "deny"):
-                raise ValueError(f"MCP server {name} approvals require tools '*' and mode ask, allow or deny")
-            if policy["mode"] == "deny":
-                lines.append("enabled = false")
-            elif policy["mode"] == "allow":
+            if not isinstance(policy, dict) or policy.get("tools") != "*" or policy.get("mode") not in ("allow", "ask"):
+                raise ValueError(f"MCP server {name} approvals require tools '*' and mode ask or allow")
+            if policy["mode"] == "allow":
                 lines.append('default_tools_approval_mode = "approve"')
             else:
                 lines.append('default_tools_approval_mode = "prompt"')

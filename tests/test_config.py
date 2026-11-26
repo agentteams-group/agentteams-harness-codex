@@ -210,7 +210,9 @@ class ConfigTests(unittest.TestCase):
             server["approvals"] = {"tools": "*", "mode": mode}
             self.assertEqual(rendered()["default_tools_approval_mode"], native)
         server["approvals"]["mode"] = "deny"
-        self.assertFalse(rendered()["enabled"])
+        with self.assertRaisesRegex(ValueError, "mode ask or allow"):
+            rendered()
+        server["approvals"]["mode"] = "ask"
         server["approvals"]["tools"] = "create_branch"
         with self.assertRaisesRegex(ValueError, "require tools"):
             rendered()
