@@ -70,6 +70,13 @@ remain supported for the currently active turn.
 
 Control messages from other Agents are rejected. Pending approval IDs expire when the turn or App Server ends. New messages without a control command are queued as new turns. Use `CODEX_APPROVAL_POLICY=on-request` for interactive approvals; the default `never` executes only within the configured sandbox and cannot escalate it. The default sandbox is `workspace-write`. On a dedicated disposable container without nested sandbox support, explicitly set `CODEX_SANDBOX_MODE=danger-full-access` to rely on container isolation; do not mount the Docker socket or unrestricted host directories into that container.
 
+Each external MCP binding in `desired.mcpServers` can set `approvals: {tools: "*", mode: ask}`.
+Use `ask` to request approval or `allow` to preapprove native calls.
+Omit the field to use the runtime default. The Worker reads the latest synchronized policy when
+starting a turn. An active turn and its pending requests keep the policy they started with.
+This controls native MCP calls and does not grant gateway credentials or repository permissions.
+
+
 ## Model configuration
 
 A managed Worker uses its Worker-scoped model, gateway URL and credential binding from `runtime/runtime.yaml`. Standalone developer runs support `CODEX_BASE_URL` and `CODEX_GATEWAY_KEY` overrides. Keep real keys in deployment secrets, not this repository.
