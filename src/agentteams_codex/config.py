@@ -152,6 +152,8 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
         "Files received from Matrix are in inbox/. Read them with your tools. Put files you intend to return in outbox/. Reply directly in the current room; do not send the same reply again through MCP.",
         "Use your native TeamHarness task tool for Task operations. The task system prepares inputs, advances accepted dependencies and delivers results to the original conversation automatically. Read its receipts; do not duplicate notifications.",
     ]
+    if (task_scope or {}).get("planning"):
+        context.append("你正在任务房间规划。先分析需求和成员分工，再一次性调用 task plan，提供 overview：用中文说明任务目标、必要要求、验收标准、实际节点分工和最终产物。不要整段复述原始提示词。系统只在规划保存后发布这条概要，确认发布后才派发首个节点；你不要再发送受理回执或重复概要。")
     if role == "manager":
         for path in manifest.get("prompts", {}).get("manager", {}).values():
             context.append((plugin / path).read_text())
@@ -221,7 +223,7 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
                 name
                 for name in os.environ
                 if name == "PYTHONPATH" or name.startswith(("AGENTTEAMS_", "TEAMHARNESS_", "MC_"))
-            ) + ["AGENTTEAMS_CODEX_TASK_CONTEXT", "AGENTTEAMS_CODEX_INPUT_BARRIER", "AGENTTEAMS_CODEX_NATIVE_SCOPE"]
+            ) + ["AGENTTEAMS_RUN_ID", "AGENTTEAMS_CODEX_TASK_CONTEXT", "AGENTTEAMS_CODEX_INPUT_BARRIER", "AGENTTEAMS_CODEX_NATIVE_SCOPE"]
         ),
     ]
     lines += [
@@ -254,4 +256,7 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
             raise ValueError(f"MCP server {name} requires url or command")
     lines += native_telemetry_configuration(trace_attributes)
     (home / "config.toml").write_text("\n".join(lines) + "\n")
+    if (task_scope or {}).get('completion'):
+        context.append("你正在总体验收收尾。报告第一句明确写验收通过或需要返工，再列实际交付文件、必要验证证据及限制。正文保持简短，不重复整份需求、不堆砌长验收表格；完整细节保留在报告文件中。通过 task complete 提交真实验收报告，系统会在任务房间保留这段正文并回传原会话；过程折叠后仍须直接看到结论和产物。")
+    context.append("面向用户的开始说明、公开过程摘要、阶段结论和验收报告统一使用中文。发起任务时，系统会完整保存当前 Human 原文；create.spec 只补充本条输入以外不可缺少的前文，当前输入完整时省略 spec，不要复制或改写当前需求来填 spec。你无需发送独立的接收、保存、已通知等回执。")
     return model, "\n\n".join(filter(None, context))

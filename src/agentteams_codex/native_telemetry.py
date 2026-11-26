@@ -3,13 +3,15 @@ import json
 import os
 from urllib.parse import unquote
 
+from .tool_progress import run_id
+
 
 def trace_attributes(config, event, task_context):
     member = config['member']
     fields = {'agentteams.runtime': 'codex', 'agentteams.telemetry.schema': 'at.worker.v1',
               'agentteams.telemetry.capture_content': 'false',
               'agentteams.worker.name': member.get('runtimeName') or os.getenv('AGENTTEAMS_WORKER_NAME', 'unknown'),
-              'agentteams.room.id': event['room_id']}
+              'agentteams.room.id': event['room_id'], 'agentteams.run.id': run_id(event)}
     if event['event_id'].startswith('$'):
         fields['agentteams.event.id'] = event['event_id']
     else:
@@ -17,6 +19,9 @@ def trace_attributes(config, event, task_context):
     sources = task_context.get('sources') or []
     fields['agentteams.input.event_ids'] = json.dumps([source['eventId'] for source in sources], separators=(',', ':'))
     task_id = task_context.get('execution') or (task_context.get('review') or [''])[0] or task_context.get('completion')
+    planning = task_context.get('planning') or []
+    if not task_id and len(planning) == 1:
+        task_id = planning[0]
     if task_id:
         fields['agentteams.task.id'] = task_id
     if config.get('team', {}).get('name'):

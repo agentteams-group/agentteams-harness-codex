@@ -62,6 +62,9 @@ def task_response(arguments, context, plugin):
     frame = load()
     if frame:
         admit(frame)
+    if arguments.get("action") == "plan" and context.get("planning") and not str(arguments.get("overview") or "").strip():
+        return {"content": [{"type": "text", "text": "请在 overview 中提供任务目标、要求、验收标准、分工和最终产物；保存规划后系统会先发布概要，再派单。"}], "isError": True,
+                "_meta": {"agentteams.task": {"effect": "none", "phaseComplete": False}}}
     try:
         outcome = common(plugin, "task_native").invoke({"operation": "task", "arguments": arguments,
                                                        "context": context})
@@ -120,6 +123,10 @@ def main():
     plugin = Path(os.environ["AGENTTEAMS_PLUGIN_DIR"])
     context = json.loads(os.environ[CONTEXT_ENV])
     schema = common(plugin, "task_cli").schema(context["role"])
+    if context.get('planning'):
+        schema['description'] += " 规划时 overview 必填：简述任务目标、要求、验收标准、节点分工和最终产物。系统保存后先发概要、再派单。"
+        schema['inputSchema']['allOf'] = [{'if': {'properties': {'action': {'const': 'plan'}}, 'required': ['action']},
+                                         'then': {'required': ['overview']}}]
     server = importlib.import_module('mcp.server')
     coordination = any(context.get(key) for key in ('planning', 'review', 'completion'))
     other_tools = [] if coordination else [tool for tool in server.list_tools()

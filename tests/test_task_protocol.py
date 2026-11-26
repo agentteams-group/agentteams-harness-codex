@@ -302,3 +302,15 @@ def test_native_presentation_is_saved_separately_from_canonical_receipt(tmp_path
     assert restored.presentation()=='已受理。'
     assert restored.frame['complete']['fact']==saved['fact']
     assert restored.frame['dispatch_receipts']==[{'receiptId':'sent','fact':'Already notified downstream.'}]
+
+
+def test_planning_trace_uses_the_same_run_as_matrix_and_only_one_authoritative_task():
+    from agentteams_codex.native_telemetry import trace_attributes
+    from agentteams_codex.tool_progress import run_id
+    config = {'member': {'runtimeName': 'leader'}}
+    event = {'event_id': '$planning', 'room_id': '!task:test'}
+    one = trace_attributes(config, event, {'planning': ['main-one']})
+    assert one['agentteams.task.id'] == 'main-one'
+    assert one['agentteams.run.id'] == run_id(event)
+    multiple = trace_attributes(config, event, {'planning': ['main-one', 'main-two']})
+    assert 'agentteams.task.id' not in multiple

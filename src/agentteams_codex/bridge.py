@@ -19,7 +19,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .client import Client, CodexError, completed_answer
-from .native_input import rollout_digest, checkpoint_rows_present
+from .native_input import rollout_digest, checkpoint_rows_present, saved_message
 from .input_barrier import InputBarrier, ENV as BARRIER_ENV
 from .admission import Scope as NativeScope, ENV as SCOPE_ENV, COMMAND_ENV as ADMISSION_COMMAND_ENV
 from .managed_matrix import ManagedMatrix
@@ -59,6 +59,13 @@ from matrix_bridge import (
 
 
 def actionable_events(payload, rooms, user_id, agents, allowed_senders=None):
+    # Dedicated control events are not Matrix chat messages. Decode only this
+    # known type through the authenticated coordination contract.
+    payload = {**payload, "rooms": {**payload.get("rooms", {}), "join": {
+        room_id: {**room, "timeline": {**room.get("timeline", {}), "events": [
+            {**event, "type": "m.room.message"} if event.get("type") == "org.agentteams.coordination" else event
+            for event in room.get("timeline", {}).get("events", [])]}}
+        for room_id, room in payload.get("rooms", {}).get("join", {}).items()}}}
     events = matrix_events(payload, rooms, user_id, agents, allowed_senders)
     by_id = {event["event_id"]: event for event in events}
     content_by_id = {
@@ -243,16 +250,106 @@ class Bridge:
         content = {"org.agentteams.progress_only": True, "org.agentteams.run_id": identity}
         task = recovery.current(task_id, team)
         if task and task.get("task_plan_id") and task.get("submission_id") and task.get("status") in {"submitted", "completed"}:
-            # Keep the exact report as the durable delivery body; present the
-            # verified phase receipt instead of repeating the report in chat.
-            result = task.get("result_status")
-            title = ("结果需要修正，已提交任务系统处理" if result == "REVISION_NEEDED" else
-                     "执行受阻，已提交任务系统处理" if result in {"BLOCKED", "INTERRUPTED"} else
-                     "节点结果已保存，后续推进由任务系统接管")
+            # Present the saved business result in the same run as its tools.
+            # The durable delivery body and its receipt remain unchanged.
             content["org.agentteams.run"] = {"version": "1", "run_id": identity,
-                                              "blocks": [{"type": "text", "text": title}]}
+                                              "blocks": [{"type": "text", "text": text}]}
         return publish_raw_saved(self.matrix, room, text, execution["checkpoint"], self.user_id, bind,
             content=content, legacy_transaction_id=matrix_transaction_id)
+
+    def finish_task_delivery(self, client, event, record, scope, thread_id):
+        """Publish the business result, then inject confirmed outgoing facts; no model turn."""
+        identity = event.get('recovery')
+        if not identity:
+            return
+        frame = json.loads(scope.path.read_text())
+        outgoing = frame.get('outgoing')
+        if not outgoing:
+            return
+        from task_recovery import Recovery
+        recovery = Recovery(device_delivery=True)
+        task_id, team = identity['task_id'], identity['team_id']
+        key = event['event_id']
+        self.journal.data.setdefault('handoff_context', {}).setdefault(key, {
+            'outgoing': outgoing, 'thread_id': thread_id, 'scope_file': str(scope.path),
+            'observed': frame.get('observed', {})})
+        self.journal.save()
+        self.persist_codex()
+        saved, answer = recovery.prepare_reply(task_id, team, scope.reply())
+        cp = saved['execution']['checkpoint']
+        message_id = cp.get('reply_event')
+        if cp.get('delivery') != 'delivered':
+            record['reply_txn'] = cp['reply_txn']
+            self.journal.save()
+            message_id = self.deliver_task(recovery, task_id, team, event['room_id'], saved['execution'], answer)
+            recovery.delivered(task_id, team, message_id)
+        record['task_result_delivered'] = message_id
+        self.journal.save()
+        native = common(self.plugin, 'task_native')
+        receipts = native.dispatched_receipts(outgoing, self.user_id, native.controller_json, wait_for_send=True)
+        self.inject_handoff_context(client, key, receipts)
+
+    def inject_handoff_context(self, client, key, receipts):
+        pending = self.journal.data['handoff_context'][key]
+        thread_id = pending['thread_id']
+        for receipt in receipts:
+            text = receipt['fact']
+            digest = saved_message(self.home, thread_id, 'developer', text)
+            if not digest:
+                client.request('thread/inject_items', {'threadId': thread_id, 'items': [
+                    {'type': 'message', 'role': 'developer', 'content': [{'type': 'input_text', 'text': text}]}]})
+                for _ in range(40):
+                    digest = saved_message(self.home, thread_id, 'developer', text)
+                    if digest:
+                        break
+                    time.sleep(.05)
+                if not digest:
+                    raise RecoveryUnavailable('Codex did not persist the confirmed handoff fact')
+            pending['observed'][receipt['receiptId']] = {'threadId': thread_id, 'rows': [digest]}
+        if receipts:
+            # Persist native bytes before acknowledging injection, including
+            # deferred receipts that arrive after the business Task completes.
+            self.persist_codex(include_workspace=False)
+            path = Path(pending['scope_file'])
+            if path.exists():
+                from .admission import write, locked
+                with locked(path):
+                    frame = json.loads(path.read_text())
+                    frame['observed'] = pending['observed']
+                    frame['dispatch_receipts'] = receipts
+                    write(path, frame)
+        outgoing = pending['outgoing']
+        expected = {item['eventId'] for item in outgoing.get('assignments', []) if item.get('status') == 'queued' and item.get('eventId')}
+        notice = outgoing.get('notification') or {}
+        if notice.get('status') == 'queued' and notice.get('eventId'):
+            expected.add(notice['eventId'])
+        seen = set()
+        for identity, row in pending['observed'].items():
+            try:
+                value = json.loads(identity)
+            except (TypeError, ValueError):
+                continue
+            if (isinstance(value, list) and len(value) == 3 and value[0] == 'dispatch'
+                    and checkpoint_rows_present(self.home, row['threadId'], row['rows'])):
+                seen.add(value[1])
+        if expected.issubset(seen):
+            del self.journal.data['handoff_context'][key]
+        self.journal.save()
+
+    def flush_handoff_context(self):
+        for key, pending in list(self.journal.data.get('handoff_context', {}).items()):
+            try:
+                native = common(self.plugin, 'task_native')
+                receipts = native.dispatched_receipts(pending['outgoing'], self.user_id, native.controller_json)
+                if not receipts:
+                    continue
+                environment = {**os.environ, 'CODEX_GATEWAY_KEY': self.config.get('desired', {}).get('model', {}).get('gatewayKey', ''),
+                               CONTEXT_ENV: json.dumps({'role': _role(self.config), 'sourceEvent': key, 'sources': []})}
+                with Client(self.workspace, env=environment) as client:
+                    client.request('thread/resume', {'threadId': pending['thread_id']})
+                    self.inject_handoff_context(client, key, receipts)
+            except Exception as error:
+                trace_event('task.handoff_context_pending', error_type=type(error).__name__)
 
     def recover_tasks(self, only_task=None):
         from task_recovery import Recovery, enabled
@@ -662,6 +759,7 @@ class Bridge:
             **os.environ,
             "CODEX_GATEWAY_KEY": (config["desired"]["model"]["gatewayKey"] if managed_worker()
                                   else os.getenv("CODEX_GATEWAY_KEY") or credential),
+            "AGENTTEAMS_RUN_ID": run_id(event),
             CONTEXT_ENV: json.dumps(task_context, ensure_ascii=False, default=str),
         }
         native_scope = NativeScope(self.home, self.plugin, task_context,
@@ -717,7 +815,15 @@ class Bridge:
                     self.managed.remember_message(event, thread_id)
             recovered = completed_answer(thread, event["event_id"], terminal_only=bool(event.get("message_execution") or event.get("recovery")))
             if recovered is not None:
-                return native_scope.presentation() or record.get("task_presentation") or recovered
+                presentation = native_scope.presentation()
+                if presentation is None:
+                    presentation = record.get("task_presentation")
+                if presentation is not None:
+                    record["task_presentation"] = presentation
+                    self.journal.save()
+                    self.finish_task_delivery(client, event, record, native_scope, thread_id)
+                    return native_scope.reply() or recovered
+                return recovered
             if record.get("status") == "running" and not (event.get("recovery") or event.get("message_execution")):
                 # The original start may have reached the model before a crash.
                 # Do not repeat shell/MCP side effects when history is uncertain.
@@ -968,7 +1074,8 @@ class Bridge:
                             if presentation is not None:
                                 record["task_presentation"] = presentation
                                 self.journal.save()
-                                return presentation
+                                self.finish_task_delivery(client, event, record, native_scope, thread_id)
+                                return native_scope.reply()
                             return (
                                 "\n".join(filter(None, answers))
                                 or "Codex completed the task."
@@ -1166,6 +1273,10 @@ class Bridge:
                     recovery.interrupted(task_id, team)
                 raise
             self.persist_codex()
+            if record.get('task_result_delivered'):
+                record['status'] = 'completed'
+                self.journal.save()
+                return
             saved, answer = recovery.prepare_reply(task_id, team, answer)
             cp = saved["execution"]["checkpoint"]
             if cp.get("delivery") == "delivered":
@@ -1210,6 +1321,7 @@ class Bridge:
         while not self.stop.is_set():
             if self.managed and time.monotonic() >= next_discovery:
                 try:
+                    self.flush_handoff_context()
                     self.recover_tasks()
                 except (RecoveryConflict, RecoveryUnavailable) as error:
                     trace_event("task.scan_pending", error_type=type(error).__name__)

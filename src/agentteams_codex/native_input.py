@@ -60,6 +60,15 @@ def commit_source(client, home, thread_id, matrix, key, view, persist, *, active
     """Persist the exact original source without requesting an extra model turn."""
     entry = view["input"]
     source = {"room_id": entry["room_id"], "event_id": entry["event_id"], **entry["input"]}
+    wire = (entry['input'].get('content') or {}).get('org.agentteams.coordination')
+    if isinstance(wire, dict):
+        # The admitted control packet is retained exactly in the shared input
+        # ledger. Native history needs its identity, not a second full copy of
+        # the Task specification and all transport snapshots.
+        meta = (wire.get('channel_meta') or {}).get('teamharness_coordination') or {}
+        source = {'room_id': entry['room_id'], 'event_id': entry['event_id'],
+                  'sender': entry['input']['sender'],
+                  'coordination': {key: meta[key] for key in ('id', 'kind', 'task_id', 'main_task_id', 'submission_id') if meta.get(key)}}
     text = "Original Matrix input\n" + json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     digest = saved_input(home, thread_id, text)
     if not digest:

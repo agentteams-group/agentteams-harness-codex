@@ -35,3 +35,21 @@ class NativeInputTests(unittest.TestCase):
             commit_source(self.client, Path('/own-fixture'), 'thread', self.matrix,
                           'key', self.view, self.persist)
         self.assertNotIn('persistToActiveTurn', self.client.request.call_args.args[1])
+
+    def test_task_control_keeps_only_its_source_reference_in_native_history(self):
+        self.view['input']['input']['content']['org.agentteams.coordination'] = {
+            'channel_meta': {'teamharness_coordination': {'id': 'signed', 'kind': 'task_assigned', 'task_id': 'node'}},
+            'input': [{'text': 'duplicated entire task request'}]}
+        with patch('agentteams_codex.native_input.saved_input', side_effect=[None, 'row-sha']):
+            commit_source(self.client, Path('/own-fixture'), 'thread', self.matrix, 'key', self.view, self.persist)
+        text = self.client.request.call_args.args[1]['items'][0]['content'][0]['text']
+        self.assertIn('signed', text)
+        self.assertIn('$input', text)
+        self.assertNotIn('duplicated entire task request', text)
+        self.assertIn('duplicated entire task request', str(self.view))
+
+    def test_original_human_text_is_preserved_without_paraphrasing(self):
+        with patch('agentteams_codex.native_input.saved_input', side_effect=[None, 'row-sha']):
+            commit_source(self.client, Path('/own-fixture'), 'thread', self.matrix, 'key', self.view, self.persist)
+        text = self.client.request.call_args.args[1]['items'][0]['content'][0]['text']
+        self.assertIn('"body":"original"', text)
