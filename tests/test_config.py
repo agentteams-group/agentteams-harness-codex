@@ -200,6 +200,21 @@ class ConfigTests(unittest.TestCase):
             config["env"]["TEAMHARNESS_SHARED_DIR"], str(self.root / "shared")
         )
 
+    def test_mcp_approval_rules_refresh_for_each_turn(self):
+        server = {"name": "github", "url": "https://gateway/mcp/github"}
+        self.config["desired"]["mcpServers"] = [server]
+        def rendered():
+            return self.prepare()[2]["mcp_servers"]["github"]
+        self.assertNotIn("default_tools_approval_mode", rendered())
+        for mode, native in (("allow", "approve"), ("ask", "prompt")):
+            server["approvals"] = {"tools": "*", "mode": mode}
+            self.assertEqual(rendered()["default_tools_approval_mode"], native)
+        server["approvals"]["mode"] = "deny"
+        self.assertFalse(rendered()["enabled"])
+        server["approvals"]["tools"] = "create_branch"
+        with self.assertRaisesRegex(ValueError, "require tools"):
+            rendered()
+
     def test_unsupported_package_and_sse_fail_explicitly(self):
         self.config["desired"]["agentPackage"] = {
             "ref": "https://example.invalid/package.zip"

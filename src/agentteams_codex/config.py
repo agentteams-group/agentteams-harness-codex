@@ -254,6 +254,19 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
             ]
         else:
             raise ValueError(f"MCP server {name} requires url or command")
+        if "approvals" in server:
+            policy = server["approvals"]
+            if not isinstance(policy, dict) or policy.get("tools") != "*" or policy.get("mode") not in ("allow", "ask", "deny"):
+                raise ValueError(f"MCP server {name} approvals require tools '*' and mode ask, allow or deny")
+            if policy["mode"] == "deny":
+                lines.append("enabled = false")
+            elif policy["mode"] == "allow":
+                lines.append('default_tools_approval_mode = "approve"')
+            else:
+                lines.append('default_tools_approval_mode = "prompt"')
+                if (os.getenv("CODEX_APPROVAL_POLICY", "never") == "never" and
+                        os.getenv("CODEX_SANDBOX_MODE") == "danger-full-access"):
+                    raise ValueError("MCP ask requires interactive approvals or a workspace sandbox")
     lines += native_telemetry_configuration(trace_attributes)
     (home / "config.toml").write_text("\n".join(lines) + "\n")
     if (task_scope or {}).get('completion'):
