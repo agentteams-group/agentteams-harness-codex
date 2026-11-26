@@ -751,7 +751,7 @@ class Bridge:
         if delivered:
             instructions += "\n\n" + delivered
             record["delivery_context_ack"] = acknowledgements
-        working_directory = task_output or self.workspace
+        working_directory = task_output or event.get("room_workdir") or self.workspace
         credential = os.getenv("AGENTTEAMS_WORKER_GATEWAY_KEY") or config.get(
             "desired", {}
         ).get("model", {}).get("gatewayKey", "")

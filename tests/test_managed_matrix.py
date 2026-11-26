@@ -18,6 +18,27 @@ from worker_matrix_state import matrix_event_key
 
 
 class ManagedTests(unittest.TestCase):
+    def test_task_room_followup_finds_only_own_assignment_and_workspace(self):
+        managed = ManagedMatrix.__new__(ManagedMatrix)
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            cwd = home / "tasks" / "exec-1" / "workspace"
+            cwd.mkdir(parents=True)
+            thread = "00000000-0000-4000-8000-000000000001"
+            sessions = home / "sessions"
+            sessions.mkdir()
+            (sessions / f"rollout-old-{thread}.jsonl").write_text(json.dumps({
+                "type": "session_meta", "payload": {"id": thread, "cwd": str(cwd)}}) + "\n")
+            records = {"assignment": {"thread_id": thread, "event": {"sender": "@dev:hs",
+                       "room_id": "!task:hs", "recovery": {"task_id": "exec-1"}}},
+                       "chat": {"thread_id": "unrelated", "event": {"room_id": "!task:hs"}}}
+            managed.bridge = Mock(home=home, user_id="@dev:hs")
+            managed.bridge.journal.data = {"events": records}
+            self.assertEqual(managed.task_room_session("!task:hs"), (thread, cwd))
+            self.assertIsNone(managed.task_room_session("!other:hs"))
+            records["assignment"]["event"]["sender"] = "@other:hs"
+            self.assertIsNone(managed.task_room_session("!task:hs"))
+
     def test_private_reply_mentions_projected_sender_without_team_roster_membership(self):
         for room_kind, sender, automatic, expected in [
             ("personal", "@manager:test", False, ["@manager:test"]),

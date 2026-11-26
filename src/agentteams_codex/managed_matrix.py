@@ -18,7 +18,7 @@ from .tool_progress import run_id
 from worker_sessions import WorkerSessions
 from worker_matrix_state import WorkerMatrix, matrix_event_key
 
-from .native_input import commit_source, rollout_digest
+from .native_input import commit_source, rollout_digest, rollout_path
 
 
 class ManagedMatrix:
@@ -252,6 +252,25 @@ class ManagedMatrix:
                 results.append({"id": call["id"], "content": {**call["arguments"], "event_id": sent}})
             return self.matrix.message_finish_tools(identity, operation, results, deliver_result=True)
 
+    def task_room_session(self, room):
+        # Only locally claimed Task assignments bind a room to a Worker thread.
+        # Historical journals already contain these records.
+        for record in reversed(list(self.bridge.journal.data["events"].values())):
+            event = record["event"]
+            work = event.get("recovery")
+            if not work or event["room_id"] != room or event["sender"] != self.bridge.user_id:
+                continue
+            thread = record.get("thread_id")
+            path = rollout_path(self.bridge.home, thread)
+            if not path:
+                return None
+            with path.open("rb") as stream:
+                cwd = Path(json.loads(stream.readline())["payload"]["cwd"])
+            if cwd.is_dir() and any(p.name == work["task_id"] and p.parent.name == "tasks"
+                                    for p in (cwd, *cwd.parents)):
+                return thread, cwd
+            return None
+
     def message_turn(self, record):
         matrix = self.matrix
         event = record["event"]
@@ -276,7 +295,13 @@ class ManagedMatrix:
                 ref = None
             current = {**event, "message_execution": identity, "thread_id": ref,
                        "checkpoint_digest": claim["checkpoint_digest"], "config_generation": view["config_generation"]}
-            if ref is None:
+            if not event.get("coordination_session") and not event.get("_task_protocol_meta"):
+                session = self.task_room_session(event["room_id"])
+                if session:
+                    task_ref, current["room_workdir"] = session
+                    if ref is None and not claim["execution"].get("checkpoint"):
+                        current["thread_id"] = task_ref
+            if current["thread_id"] is None:
                 history = raw_room_history(self.bridge.matrix, matrix, self.bridge.user_id, event["room_id"],
                                            event["event_id"], self.event)
                 if history:
