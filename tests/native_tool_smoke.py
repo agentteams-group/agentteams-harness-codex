@@ -57,11 +57,14 @@ with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
     work.mkdir()
     Model.marker = work / "effect"
     sandbox = sys.argv[2] if len(sys.argv) > 2 else "danger-full-access"
+    exit_code = int(sys.argv[3]) if len(sys.argv) > 3 else 0
     assert sandbox in {"workspace-write", "danger-full-access"}
     outside = Path("/opt/agentteams") / f"native-shell-fixture-{root.name}"
     Model.tool_command = f"echo confirmed > {Model.marker}"
     if sandbox == "workspace-write":
         Model.tool_command += f" && ! touch {outside}"
+    if exit_code:
+        Model.tool_command += f"; exit {exit_code}"
     Controller.deny = sys.argv[1] == "deny"
     model, controller = [stack.enter_context(ThreadingHTTPServer(("127.0.0.1", 0), handler))
                          for handler in (Model, Controller)]
@@ -101,5 +104,8 @@ with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
         artifact = Controller.checkpoint["artifacts"][-1]
         data = (root / "storage" / artifact["key"]).read_bytes()
         assert hashlib.sha256(data).hexdigest() == artifact["sha256"]
-        assert json.loads(data)["results"][0]["content"]["exitCode"] == 0
+        receipt = json.loads(data)["results"][0]
+        assert receipt["content"]["exitCode"] == exit_code
+        if exit_code:
+            assert receipt["status"] == "error" and 'effect' not in receipt
     print("Native tool admission passed:", sys.argv[1], sandbox)

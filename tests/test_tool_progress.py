@@ -95,7 +95,7 @@ class ToolProgressTests(unittest.TestCase):
 
     def test_task_run_identity_survives_transport_recovery(self):
         event = {'recovery': {'team_id': 'squad', 'task_id': 'execution', 'generation': 2}}
-        self.assertEqual(run_id(event), 'codex:task:squad:execution:2')
+        self.assertEqual(run_id(event), 'task:squad:execution:2')
         self.assertNotEqual(run_id(self.event), run_id({**self.event, 'event_id': '$other'}))
 
     def test_sdk_duration_is_used_when_available(self):

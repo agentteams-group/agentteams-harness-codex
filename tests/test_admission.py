@@ -91,6 +91,35 @@ class AdmissionTests(unittest.TestCase):
         assert requests[-1]['results'][0]['content'] == {'error': 'ordinary returned error'}
 
 
+    def test_scoped_mcp_receipt_preserves_native_success_and_failure(self):
+        from task_operation import tool_policy
+        from itertools import product
+        for (response, failed), kind in product([
+            ({'isError': True, 'content': [{'type': 'text', 'text': 'Concrete MCP failure'}]}, True),
+            ({'isError': False, 'structuredContent': {'ok': True, 'idempotent_hit': True}}, False),
+            ({'content': [], 'structuredContent': {'error': 'ordinary user field'}}, False),
+        ], ['task', 'message']):
+            with self.subTest(response=response, kind=kind):
+                requests = []
+                def execute(request):
+                    requests.append(request)
+                    if request['action'] == 'tool_policy':
+                        return tool_policy(request.get('registration'))
+                    if request['action'] in {'current', 'matrix.message.owned'}:
+                        saved = {'execution': {'checkpoint': {'operation': {
+                            'id': 'operation-owned', 'state': 'started',
+                            'evidence': json.dumps([{'id': 'call-native'}])}}}}
+                        return {'task': saved} if kind == 'task' else saved
+                event = dict(hook('PostToolUse', 'mcp__fixture__write'), tool_response=response)
+                with patch('task_recovery_rpc.execute', side_effect=execute):
+                    context = frame()
+                    context['recovery']['kind'] = kind
+                    tool_hook.scoped_tool(context, event)
+                result = requests[-1]['results'][0]
+                self.assertEqual(result.get('status') == 'error', failed)
+                self.assertEqual(result['content'], response)
+                self.assertNotIn('effect', result)
+
     def test_wrong_tool_id_cannot_finish_started_operation(self):
         from task_operation import tool_policy
         def execute(request):
@@ -116,13 +145,19 @@ class AdmissionTests(unittest.TestCase):
                 restored.require_admitted()
 
 
-    def test_manager_without_owned_execution_keeps_generic_tools_fenced(self):
+    def test_manager_generic_tools_use_canonical_admission_without_a_worker_execution(self):
         from task_operation import tool_policy
         manager = {**frame(), 'context': {'sourceEvent': '$manager-dm', 'role': 'manager'}, 'recovery': None}
         with patch('task_recovery_rpc.execute', side_effect=lambda request: tool_policy(request.get('registration'))), \
+                patch.object(admission, 'admit') as gate:
+            tool_hook.scoped_tool(manager, hook(name='Bash'))
+            gate.assert_called_once_with(manager)
+            tool_hook.scoped_tool(manager, hook('PostToolUse', 'Bash'))
+            tool_hook.scoped_tool(manager, hook())
+
+    def test_worker_cannot_omit_its_durable_execution(self):
+        from task_operation import tool_policy
+        with patch('task_recovery_rpc.execute', side_effect=lambda request: tool_policy(request.get('registration'))), \
                 patch.object(admission, 'admit'):
             with self.assertRaisesRegex(RecoveryConflict, 'durable execution admission'):
-                tool_hook.scoped_tool(manager, hook(name='Bash'))
-            # Canonical Task remains owned by the common authority rather than a
-            # second, fabricated generic execution transaction.
-            tool_hook.scoped_tool(manager, hook())
+                tool_hook.scoped_tool({**frame(), 'recovery': None}, hook(name='Bash'))

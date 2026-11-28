@@ -22,8 +22,10 @@ from agentteams_codex.task_protocol import native_task_metadata
 from agentteams_codex.native_telemetry import trace_attributes
 from agentteams_codex.input_barrier import InputBarrier, ENV as BARRIER_ENV
 from agentteams_codex.native_input import saved_input, rollout_path, checkpoint_rows_present
+from agentteams_codex.mcp_approvals import automatic_response
 
 REFRESH = os.getenv("CODEX_NATIVE_REFRESH_FIXTURE") == "true"
+APPROVAL = os.getenv("CODEX_NATIVE_APPROVAL_FIXTURE") == "true"
 LATE_BODY = "OWN_PRIVATE_LATE_INPUT: amend your original request before registering it."
 
 
@@ -108,7 +110,7 @@ def main():
         threading.Thread(target=server.serve_forever, daemon=True).start()
         collector = ThreadingHTTPServer(('127.0.0.1', 0), Collector)
         threading.Thread(target=collector.serve_forever, daemon=True).start()
-        os.environ.update(AGENTTEAMS_OTEL_ENABLED='true', OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=f'http://127.0.0.1:{collector.server_port}/v1/traces', OTEL_EXPORTER_OTLP_TRACES_HEADERS='')
+        os.environ.update(AGENTTEAMS_OTEL_ENABLED='true', AGENTTEAMS_OTEL_CAPTURE_CONTENT='false', OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=f'http://127.0.0.1:{collector.server_port}/v1/traces', OTEL_EXPORTER_OTLP_TRACES_HEADERS='')
         config = {'member': {'role': 'manager', 'runtime': 'codex', 'runtimeName': 'fixture-manager'},
                   'desired': {'model': {'model': 'test-model', 'gatewayUrl': f'http://127.0.0.1:{server.server_port}'}}}
         plugin = source / 'plugins/teamharness'
@@ -117,6 +119,10 @@ def main():
         Model.original_ref = context['sources'][0]['inputId']
         Model.related_ref = common(plugin, 'task_receipt').input_reference('!own:test', '$late-native')
         model, instructions = prepare(config, home, workspace, plugin, trace_attributes=trace_attributes(config,event,context))
+        if APPROVAL:
+            native_config = home / 'config.toml'
+            native_config.write_text(native_config.read_text().replace(
+                'default_tools_approval_mode = "approve"', 'default_tools_approval_mode = "prompt"'))
         env = {**os.environ, 'HOME': str(root), 'CODEX_HOME': str(home), 'CODEX_GATEWAY_KEY': 'own-fixture',
                'PATH': str(binary) + os.pathsep + os.environ['PATH'],
                'AGENTTEAMS_PLUGIN_DIR': str(plugin), CONTEXT_ENV: json.dumps(context),
@@ -144,6 +150,7 @@ def main():
                     else:
                         raise AssertionError('SDK admitted a forged assistant message')
                 completed = []
+                approvals = []
                 checkpoints = []
                 frames = []
                 def persist(frame):
@@ -163,12 +170,27 @@ def main():
                     except TimeoutError:
                         continue
                     if 'id' in notification and notification.get('method'):
+                        if APPROVAL and notification['method'] == 'mcpServer/elicitation/request':
+                            params = notification['params']
+                            assert params['_meta']['codex_approval_kind'] == 'mcp_tool_call'
+                            assert params['serverName'] == 'teamharness'
+                            server_policy = {'mode': 'ask', 'tools': '*'}
+                            policy = {'desired': {'mcpServers': [{'name': 'teamharness', 'approvals': server_policy}]}}
+                            assert automatic_response(policy, params, thread, turn['id']) is None
+                            server_policy['mode'] = 'allow'
+                            response = automatic_response(policy, params, thread, turn['id'])
+                            assert response == {'action': 'accept', 'content': None}, params
+                            approvals.append(notification['id'])
+                            client.send({'id': notification['id'], 'result': response})
+                            continue
                         raise AssertionError('Native Task unexpectedly requested approval/input: ' + notification['method'])
                     if notification.get('method') == 'item/completed':
                         completed.append(notification['params']['item'])
                     if notification.get('method') == 'turn/completed':
                         assert notification['params']['turn']['status'] == 'completed', notification
                         break
+                if APPROVAL:
+                    assert len(approvals) == 2, approvals
             if REFRESH:
                 assert checkpoint_rows_present(home, thread, frames[0]['rows'])
                 assert frames[0]['sourceEvent'] == '$own-native'
@@ -250,7 +272,8 @@ def main():
             evidence = os.getenv('CODEX_NATIVE_TRACE_EVIDENCE')
             if evidence:
                 Path(evidence).write_text(json.dumps(Collector.payloads, indent=2) + '\n')
-            print(json.dumps({'nativeAppServerAndMCP': True, 'sourceBound': True, 'taskAuthorizationPrompt': False,
+            print(json.dumps({'nativeAppServerAndMCP': True, 'sourceBound': True, 'taskAuthorizationPrompt': APPROVAL,
+                              'nativeMcpApprovals': len(approvals),
                               'frameworkReceiptInNativeToolContext': True, 'modelRequests': len(Model.requests),
                               'definitiveNoEffectMetadataPreserved': None if REFRESH else True,
                               'durableInputRefreshBeforeModel': bool(checkpoints), 'nativeOtlpSpans': len(spans), 'nativeSpanNames': sorted({span['name'] for span in spans}),

@@ -75,22 +75,22 @@ def main():
             (root/'runtime').mkdir()
             source = Path(os.environ['AT_SOURCE']).resolve(); plugin = source/'plugins/teamharness'
             context = {'role': 'manager', 'sourceEvent': '$native-origin', 'sources': [{
-                'eventId': '$native-origin', 'roomId': '!own:test', 'userId': '@own:test'}]}
+                'eventId': '$native-origin', 'roomId': '!own:test', 'userId': '@own:test'}],
+                'retained': '原始任务记录' * 20000}
             scope = Scope(home, plugin, context)
             config = {'member': {'role': 'manager', 'runtime': 'codex'}, 'desired': {'model': {
                 'model': 'own-model', 'gatewayUrl': f'http://127.0.0.1:{servers[1].server_port}'}}}
-            os.environ.update(AGENTTEAMS_OTEL_ENABLED='true',
+            os.environ.update(AGENTTEAMS_OTEL_ENABLED='true', AGENTTEAMS_OTEL_CAPTURE_CONTENT='false',
                 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=f'http://127.0.0.1:{servers[2].server_port}/v1/traces',
                 OTEL_EXPORTER_OTLP_TRACES_HEADERS='')
             model, instructions = prepare(config, home, workspace, plugin,
                 trace_attributes={'agentteams.event.id': '$native-origin', 'agentteams.room.id': '!own:test'})
             env = {**os.environ, 'HOME': str(root), 'CODEX_HOME': str(home), 'CODEX_GATEWAY_KEY': 'own-fixture',
                    'AGENTTEAMS_AUTH_TOKEN': 'own-fixture', 'AGENTTEAMS_PLUGIN_DIR': str(plugin),
-                   CONTEXT_ENV: json.dumps(context),
                    'AGENTTEAMS_CONTROLLER_URL': f'http://127.0.0.1:{servers[0].server_port}',
                    ENV: str(scope.path), COMMAND_ENV: json.dumps([sys.executable, '-m', 'agentteams_codex.admission']),
                    'NO_PROXY': '127.0.0.1,localhost', 'no_proxy': '127.0.0.1,localhost'}
-            for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'):
+            for key in ('HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', CONTEXT_ENV):
                 env.pop(key, None)
             command = json.loads(os.environ['CODEX_NATIVE_COMMAND'])
             with Client(workspace, command=command, env=env,

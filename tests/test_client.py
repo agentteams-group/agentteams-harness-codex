@@ -88,6 +88,7 @@ class ClientTests(unittest.TestCase):
 
     def test_cold_mcp_retry_happens_only_before_turn_start(self):
         client = Client.__new__(Client)
+        client.approval_policy = "never"
         with (
             patch.object(
                 client,

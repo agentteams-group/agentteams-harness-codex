@@ -32,7 +32,8 @@ class ManagerTests(unittest.TestCase):
                     bridge.stop.set()
                     return {'next_batch': 'cursor'}
                 bridge.matrix.sync = Mock(side_effect=sync)
-                with patch('agentteams_codex.bridge.subprocess.run') as report:
+                with patch('agentteams_codex.bridge.subprocess.run') as report, \
+                        patch('agentteams_codex.bridge.discover_manager_rooms', return_value=({'@admin:local'}, set())):
                     bridge.poll()
                 self.assertTrue(bridge.reported_ready)
                 self.assertGreater(bridge.last_sync, 0)
@@ -94,7 +95,8 @@ class ManagerTests(unittest.TestCase):
                         '!dm:local': {'timeline': {'events': events}},
                     }}}
                 bridge.matrix.sync = Mock(side_effect=sync)
-                bridge.poll()
+                with patch('agentteams_codex.bridge.discover_manager_rooms', return_value=({'@admin:local'}, set())):
+                    bridge.poll()
                 self.assertNotIn('$already-done', bridge.journal.data['events'])
                 self.assertEqual(bridge.journal.data['events']['$queued']['status'], 'completed')
                 self.assertEqual(bridge.journal.data['events']['$still-pending']['status'], 'queued')

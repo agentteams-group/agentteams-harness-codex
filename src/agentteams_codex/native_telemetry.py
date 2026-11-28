@@ -9,7 +9,7 @@ from .tool_progress import run_id
 def trace_attributes(config, event, task_context):
     member = config['member']
     fields = {'agentteams.runtime': 'codex', 'agentteams.telemetry.schema': 'at.worker.v1',
-              'agentteams.telemetry.capture_content': 'false',
+              'agentteams.telemetry.capture_content': str(os.getenv('AGENTTEAMS_OTEL_CAPTURE_CONTENT', 'true').lower() in {'true', '1'}).lower(),
               'agentteams.worker.name': member.get('runtimeName') or os.getenv('AGENTTEAMS_WORKER_NAME', 'unknown'),
               'agentteams.room.id': event['room_id'], 'agentteams.run.id': run_id(event)}
     if event['event_id'].startswith('$'):
@@ -22,8 +22,15 @@ def trace_attributes(config, event, task_context):
     planning = task_context.get('planning') or []
     if not task_id and len(planning) == 1:
         task_id = planning[0]
+    task = (task_context.get('context') or {}).get('task') or {}
+    task_id = task_id or task.get('id')
     if task_id:
         fields['agentteams.task.id'] = task_id
+    main_task_id = task.get('mainTaskId') or (task.get('id') if task.get('kind') == 'main' else None) or task_context.get('completion') or (planning[0] if len(planning) == 1 else None)
+    if main_task_id:
+        fields['agentteams.main_task.id'] = main_task_id
+    fields['gen_ai.agent.id'] = fields['agentteams.worker.name']
+    fields['gen_ai.agent.name'] = fields['agentteams.worker.name']
     if config.get('team', {}).get('name'):
         fields['agentteams.team.id'] = config['team']['name']
     recovery = event.get('recovery') or {}
@@ -51,7 +58,7 @@ def configuration(attributes=None):
             if not separator:
                 raise ValueError('Invalid native OTLP header configuration')
             headers[unquote(key.strip())] = unquote(value.strip())
-    lines = ['[otel]', 'exporter = "none"', 'metrics_exporter = "none"', 'log_user_prompt = false',
+    lines = ['[otel]', 'exporter = "none"', 'metrics_exporter = "none"', 'log_user_prompt = ' + str(os.getenv('AGENTTEAMS_OTEL_CAPTURE_CONTENT', 'true').lower() in {'true', '1'}).lower(),
              '[otel.trace_exporter.otlp-http]', 'endpoint = ' + json.dumps(endpoint), 'protocol = "json"',
              '[otel.trace_exporter.otlp-http.headers]']
     lines += [json.dumps(key) + ' = ' + json.dumps(value) for key, value in headers.items()]

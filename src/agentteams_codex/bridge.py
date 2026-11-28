@@ -25,9 +25,10 @@ from .admission import Scope as NativeScope, ENV as SCOPE_ENV, COMMAND_ENV as AD
 from .managed_matrix import ManagedMatrix
 from .tool_hook import require_hooks
 from .tool_progress import ToolProgress, run_id
-from .config import managed_worker, prepare, read_runtime, sync_assigned_skills, _role
+from .config import managed_worker, native_approval_policy, prepare, read_runtime, sync_assigned_skills, _role
 from .task_protocol import CONTEXT_ENV, prepare_turn, delivery_context, common
 from .native_telemetry import trace_attributes
+from .mcp_approvals import automatic_native_response, automatic_response, is_tool_approval, decision as mcp_decision
 try:
     from runtime_observability import event as trace_event
 except ImportError:
@@ -55,6 +56,7 @@ from matrix_bridge import (
     source_agent_reply_user_id,
     mc,
     manager_allowed_senders,
+    discover_manager_rooms,
 )
 
 
@@ -351,6 +353,30 @@ class Bridge:
             except Exception as error:
                 trace_event('task.handoff_context_pending', error_type=type(error).__name__)
 
+    def recover_denied_tool(self, recovery, task, team):
+        operation = ((task.get("execution") or {}).get("checkpoint") or {}).get("operation") or {}
+        if operation.get("state") != "started":
+            return False
+        expected = json.loads(operation.get("evidence") or "[]")
+        if not expected:
+            return False
+        for path in (self.home / "agentteams-native").glob("*.json"):
+            frame = json.loads(path.read_text())
+            identity = (frame.get("recovery") or {}).get("identity") or {}
+            if identity.get("task_id") != task["task_id"] or identity.get("team_id") != team:
+                continue
+            denied = frame.get("denied_tools") or {}
+            if not all(all(denied.get(call["id"], {}).get(key) == call.get(key)
+                           for key in ("id", "name", "arguments_sha256")) for call in expected):
+                continue
+            current = {**identity, **{key: task["execution"][key] for key in ("instance_id", "generation", "process_id")}}
+            recovery.finish_tools(current, operation["id"], [
+                {"id": call["id"], "status": "error", "content": {
+                    "stage": "PreToolUse", "executed": False, "error": denied[call["id"]]["error"]}}
+                for call in expected])
+            return True
+        return False
+
     def recover_tasks(self, only_task=None):
         from task_recovery import Recovery, enabled
         if not enabled() or self.config.get("member", {}).get("role") == "manager":
@@ -367,9 +393,15 @@ class Bridge:
                 claimed = recovery.claim(snapshot, entry)
             except RecoveryConflict:
                 continue  # A changed assignment must not block an unrelated Task.
+            from runtime_control import retired_task_runs, retired_run_delivered
+            for ending in retired_task_runs(team, claimed['task'], recovery.process):
+                ending_event = self.matrix.send_content(ending['room_id'], ending['content'], ending['transaction'])
+                retired_run_delivered(recovery.process, ending['transaction'], ending_event)
             task = claimed["task"]
             execution = task["execution"]
             if execution["state"] == "needs_verification":
+                if self.recover_denied_tool(recovery, task, team):
+                    continue
                 trace_event("task.recovery.verify", team_id=team, task_id=task_id, generation=execution["generation"])
                 continue
             cp = execution.get("checkpoint") or {}
@@ -425,9 +457,6 @@ class Bridge:
             self.runtime_path, self.name, os.environ["AGENTTEAMS_MATRIX_DOMAIN"]
         )
         self.agent_ids = runtime_agent_user_ids(self.runtime_path)
-        if self.config.get("member", {}).get("role") == "manager":
-            domain = os.environ["AGENTTEAMS_MATRIX_DOMAIN"]
-            self.agent_ids = manager_allowed_senders(self.runtime_path, domain) - {f"@{os.getenv('AGENTTEAMS_ADMIN_USER', 'admin')}:{domain}"}
         if not self.rooms:
             raise ValueError("runtime.yaml has no Matrix rooms")
         if managed_worker():
@@ -522,6 +551,12 @@ class Bridge:
                 self.journal.data["question_receipts"].pop(transaction, None)
                 self.journal.save()
 
+    def task_supplement(self, event):
+        from runtime_control import task_supplement
+        current = (self.active or {}).get("event") or {}
+        return task_supplement(self.config, {**(current.get("recovery") or {}),
+                                            "room_id": current.get("room_id")}, event)
+
     def handle_control(self, event):
         body = event["body"]
         answer = event.get("answer")
@@ -551,7 +586,7 @@ class Bridge:
             active = self.active
             if not active or control.get("run_id") != active["event"]["event_id"] or event["room_id"] != active["event"]["room_id"]:
                 return control["action"] == "stop"
-            if event["sender"] != active["event"]["sender"] or not self.direct_member(event):
+            if active["event"]["sender"] not in {event["sender"], self.user_id} or not self.direct_member(event):
                 return True
             # Persist the supplementary event before steering: the poller
             # and native turn run on separate threads, and either may win.
@@ -568,10 +603,10 @@ class Bridge:
         admin = self.config.get("team", {}).get("admin", {}).get("matrixUserId")
         if not active or event["room_id"] != active["event"]["room_id"]:
             self.reply(event, "No Codex turn is active in this room.", "control")
-        elif event["sender"] in self.agent_ids or event["sender"] not in {
-            active["event"]["sender"],
-            admin,
-        }:
+        elif not self.task_supplement(event) and (event["sender"] in self.agent_ids or (
+            event["sender"] not in {active["event"]["sender"], admin}
+            and not (active["event"]["sender"] == self.user_id and self.direct_member(event))
+        )):
             self.reply(
                 event,
                 "Only the requesting human or Team admin can control this turn.",
@@ -596,7 +631,10 @@ class Bridge:
             return False
         try:
             members = self.matrix.request("GET", "/_matrix/client/v3/rooms/" + urllib.parse.quote(event["room_id"], safe="") + "/joined_members")
-            return set(members.get("joined", {})) == {self.user_id, event["sender"]}
+            joined = set(members.get("joined", {}))
+            peer = joined - {self.user_id}
+            return (self.user_id in joined and len(peer) == 1 and not peer.intersection(self.agent_ids)
+                    and event["sender"] in joined)
         except Exception:
             return False
 
@@ -665,15 +703,22 @@ class Bridge:
                     stage = "matrix.events"
                     allowed_senders = None
                     if self.config.get("member", {}).get("role") == "manager":
-                        allowed_senders = manager_allowed_senders(self.runtime_path, os.environ["AGENTTEAMS_MATRIX_DOMAIN"])
+                        domain = os.environ["AGENTTEAMS_MATRIX_DOMAIN"]
+                        allowed_senders = (manager_allowed_senders(self.runtime_path, domain)
+                                           | manager_allowed_senders(self.runtime_path, domain, "dmAllowExtra"))
                     trusted = allowed_senders if allowed_senders is not None else self.agent_ids | {
                         self.config.get("team", {}).get("admin", {}).get("matrixUserId", "")
                     }
                     self.join_invites(payload, trusted)
                     # Matrix membership is the access boundary. Task rooms created
                     # by TeamHarness may not appear in the initial runtime.yaml.
-                    for room_id in payload.get("rooms", {}).get("join", {}):
-                        self.rooms.setdefault(room_id, "team")
+                    if self.config.get("member", {}).get("role") == "manager":
+                        allowed_senders, self.agent_ids = discover_manager_rooms(
+                            self.matrix, payload, self.rooms, self.user_id, self.runtime_path,
+                            os.environ["AGENTTEAMS_MATRIX_DOMAIN"])
+                    else:
+                        for room_id in payload.get("rooms", {}).get("join", {}):
+                            self.rooms.setdefault(room_id, "team")
                     if cursor:
                         self.matrix.fill_timeline_gaps(payload, cursor, self.rooms)
                     events = (
@@ -751,17 +796,18 @@ class Bridge:
         if delivered:
             instructions += "\n\n" + delivered
             record["delivery_context_ack"] = acknowledgements
-        working_directory = task_output or self.workspace
+        working_directory = task_output or event.get("room_workdir") or self.workspace
         credential = os.getenv("AGENTTEAMS_WORKER_GATEWAY_KEY") or config.get(
             "desired", {}
         ).get("model", {}).get("gatewayKey", "")
         environment = {
             **os.environ,
+            "CODEX_APPROVAL_POLICY": native_approval_policy(config),
             "CODEX_GATEWAY_KEY": (config["desired"]["model"]["gatewayKey"] if managed_worker()
                                   else os.getenv("CODEX_GATEWAY_KEY") or credential),
             "AGENTTEAMS_RUN_ID": run_id(event),
-            CONTEXT_ENV: json.dumps(task_context, ensure_ascii=False, default=str),
         }
+        environment.pop(CONTEXT_ENV, None)
         native_scope = NativeScope(self.home, self.plugin, task_context,
             {'kind': 'task', 'identity': event['recovery']} if event.get('recovery') else
             {'kind': 'message', 'identity': event['message_execution']} if event.get('message_execution') else None)
@@ -847,11 +893,11 @@ class Bridge:
             if direct:
                 self.execution_status(event, "running")
             redirects = []
+            terminal = None
             self.journal.save()
             answers = []
-            deadline = time.monotonic() + int(
-                os.getenv("CODEX_TASK_TIMEOUT_SECONDS", "3600")
-            )
+            timeout = os.getenv("CODEX_TASK_TIMEOUT_SECONDS")
+            deadline = time.monotonic() + int(timeout) if timeout else None
             tool_progress = ToolProgress(self.matrix, event, run_id(event))
             try:
                 while not self.stop.is_set():
@@ -859,7 +905,7 @@ class Bridge:
                         lambda frame: self.checkpoint_refreshed_input(record, frame),
                         context=task_context, home=self.home)
                     self.checkpoint_input(client, thread_id, turn["id"], record)
-                    if time.monotonic() > deadline:
+                    if deadline is not None and time.monotonic() > deadline:
                         client.control("turn/interrupt", thread_id, turn["id"])
                         raise TimeoutError("Codex task timed out")
                     while not self.controls.empty():
@@ -938,22 +984,28 @@ class Bridge:
                                             else "decline"
                                         )
                                     }
+                                elif method == "mcpServer/elicitation/request" and is_tool_approval(request.get("params", {}), thread_id, turn['id']):
+                                    if verb not in {"/approve", "/reject"}:
+                                        raise ValueError("Use /approve REQUEST_ID or /reject REQUEST_ID")
+                                    if answer and answer != f"{thread_id}:{turn['id']}":
+                                        raise ValueError("The requested Codex approval belongs to another turn")
+                                    result = mcp_decision(verb == "/approve")
                                 else:
                                     result = {"action": "decline", "content": None}
                                 client.send({"id": request["id"], "result": result})
                                 self.pending_requests.pop(request_id, None)
                                 if method == "item/tool/requestUserInput" and request.get("_confirmation_id"):
                                     self.question_receipt(event, request, "answered")
-                                if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
-                                    self.reply(event, f"Codex approval {request_id}: {result['decision']}.",
+                                if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"} or (method == "mcpServer/elicitation/request" and is_tool_approval(request.get("params", {}), thread_id, turn['id'])):
+                                    approval_result = result.get("decision", result.get("action"))
+                                    self.reply(event, f"Codex approval {request_id}: {approval_result}.",
                                         f"approval:{request_id}:resolved", {
                                             "version": 1, "runtime": "codex", "request_id": request_id,
                                             "context_id": f"{thread_id}:{turn['id']}",
-                                            "status": "approved" if result["decision"] == "accept" else "rejected",
+                                            "status": "approved" if approval_result == "accept" else "rejected",
                                         })
                             if source.get("control_execution"):
                                 self.managed.confirm_control(source, "native control accepted", retire=verb != "/redirect")
-                            self.reply(source, "Codex control accepted.", "control")
                         except (ValueError, CodexError) as error:
                             if verb == "/redirect" or (verb == "/steer" and source.get("execution_control")):
                                 # Completion can win the race with steering.
@@ -972,6 +1024,10 @@ class Bridge:
                         "params", {}
                     )
                     if "id" in message and method:
+                        response = automatic_native_response(config, method, params, thread_id, turn['id'])
+                        if response is not None:
+                            client.send({"id": message["id"], "result": response})
+                            continue
                         if method == "item/permissions/requestApproval":
                             client.send(
                                 {"id": message["id"], "result": {"permissions": {}}}
@@ -982,6 +1038,11 @@ class Bridge:
                             "item/tool/requestUserInput",
                             "mcpServer/elicitation/request",
                         }:
+                            if method == "mcpServer/elicitation/request":
+                                response = automatic_response(config, params, thread_id, turn['id'])
+                                if response is not None:
+                                    client.send({"id": message["id"], "result": response})
+                                    continue
                             request_id = str(message["id"])
                             self.pending_requests[request_id] = message
                             if method == "item/tool/requestUserInput":
@@ -1001,7 +1062,7 @@ class Bridge:
                                         "confirmation_id": confirmation_id, "questions": questions,
                                         "reply_format": "com.agentteams.answer", "status": "pending",
                                         "requested_of": event["sender"],
-                                        "expires_at": int((time.time() + max(0, deadline - time.monotonic())) * 1000),
+                                        "expires_at": int((time.time() + (max(0, deadline - time.monotonic()) if deadline is not None else 3600)) * 1000),
                                     }]},
                                 }, f"codex:{event['event_id']}:request:{request_id}")
                                 continue
@@ -1021,10 +1082,10 @@ class Bridge:
                                     "reply_format": "com.agentteams.answer",
                                     "context_id": f"{thread_id}:{turn['id']}",
                                     "status": "pending",
-                                    "expires_at": int((time.time() + max(0, deadline - time.monotonic())) * 1000),
-                                    "tool_name": "commandExecution" if method == "item/commandExecution/requestApproval" else "fileChange",
+                                    "expires_at": int((time.time() + (max(0, deadline - time.monotonic()) if deadline is not None else 3600)) * 1000),
+                                    "tool_name": "commandExecution" if method == "item/commandExecution/requestApproval" else "mcp" if method == "mcpServer/elicitation/request" else "fileChange",
                                     "parameters": json.dumps(params, ensure_ascii=False),
-                                } if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"} else None,
+                                } if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"} or (method == "mcpServer/elicitation/request" and is_tool_approval(params, thread_id, turn['id'])) else None,
                             )
                         else:
                             client.send(
@@ -1098,10 +1159,15 @@ class Bridge:
                 client.control("turn/interrupt", thread_id, turn["id"])
                 raise InterruptedError("Worker is shutting down")
             finally:
+                state = (terminal or {}).get("status")
+                try:
+                    tool_progress.finish("quiet" if state == "completed" else "cancelled" if state == "interrupted" else "failed")
+                except Exception as error:
+                    trace_event("progress.delivery_failed", event_id=event["event_id"], error_type=type(error).__name__)
                 self.active = None
                 for request_id, request in list(self.pending_requests.items()):
                     if request.get("_confirmation_id"):
-                        self.question_receipt(event, request, "expired" if time.monotonic() >= deadline else "cancelled")
+                        self.question_receipt(event, request, "expired" if deadline is not None and time.monotonic() >= deadline else "cancelled")
                     if request["method"] in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
                         self.reply(event, f"Codex approval {request_id} expired.", f"approval:{request_id}:expired", {
                             "version": 1, "runtime": "codex", "request_id": request_id, "status": "expired",
@@ -1139,7 +1205,11 @@ class Bridge:
             return False
         config = read_runtime(self.runtime_path)
         model, instructions = prepare(config, self.home, self.workspace, self.plugin)
-        with Client(self.workspace, env={**os.environ, "CODEX_GATEWAY_KEY": config["desired"]["model"]["gatewayKey"]}) as client:
+        environment = {**os.environ, "CODEX_APPROVAL_POLICY": native_approval_policy(config),
+                       "CODEX_GATEWAY_KEY": config["desired"]["model"]["gatewayKey"],
+                       CONTEXT_ENV: json.dumps({"role": _role(config), "sourceEvent": event["event_id"],
+                                                "sourceRoom": room, "sources": []})}
+        with Client(self.workspace, env=environment) as client:
             actual = client.open_thread(thread, self.workspace, model, instructions)
             if actual["id"] != thread:
                 raise RecoveryConflict("Late assignment resolved to a different Codex thread")
@@ -1151,6 +1221,11 @@ class Bridge:
 
     def process(self, event_id, record):
         event = record["event"]
+        if (getattr(self, "manager_receipts", None)
+                and self.manager_receipts.was_completed(event["room_id"], event_id)):
+            record["status"] = "completed"
+            self.journal.save()
+            return
         if event.get("recovery"):
             return self.process_recovered_task(event_id, record)
         if event.get("coordination_session", "").startswith("coordination-task:"):
@@ -1262,7 +1337,10 @@ class Bridge:
             if execution["state"] != "active":
                 raise RecoveryConflict("Codex Task execution is not active")
             if record.get("status") == "running":
-                recovery.interrupted(task_id, team)
+                # The synchronous native turn has already returned or failed.
+                # Core releases only settled progress; uncertain tools remain
+                # fenced. Its next claim supplies the new execution identity.
+                recovery.release_failed_turn(identity)
                 return
             identity["thread_id"], selection = task_thread(self.home, recovery, task, work)
             event["body"] = recovery.resume_text({**task, "team_id": team, "spec": identity["spec"]})
@@ -1310,9 +1388,17 @@ class Bridge:
                     trace_event("task.recovery.cache_skipped", task_id=task_id, error_type=type(exc).__name__)
 
     def run(self):
-        # Discover/claim before polling or accepting new Matrix work. A failed
-        # recovery leaves the process blocked and visible to its supervisor.
-        self.recover_tasks()
+        # Register and recover before accepting Matrix work. A temporary
+        # control-plane failure keeps this process available for recovery.
+        while not self.stop.is_set():
+            try:
+                self.recover_tasks()
+                break
+            except (RecoveryConflict, RecoveryUnavailable, OSError, subprocess.SubprocessError) as error:
+                trace_event("task.scan_pending", error_type=type(error).__name__)
+                self.stop.wait(2)
+        if self.stop.is_set():
+            return
         threading.Thread(target=self.poll, daemon=True).start()
         if self.managed or self.manager_receipts:
             while not self.stop.is_set() and not self.scan_ready.wait(0.5):

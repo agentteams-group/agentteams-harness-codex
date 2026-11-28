@@ -92,6 +92,13 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(scope=scope), self.assertRaisesRegex(ValueError, "Assigned Skill unavailable"):
                 self.prepare(scope)
 
+    def test_explicit_mcp_policy_keeps_each_native_call_available_for_hot_decisions(self):
+        for mode in ("ask", "allow"):
+            with self.subTest(mode=mode), patch.dict(os.environ, {}, clear=True):
+                self.config["desired"]["mcpServers"] = [{"name": "github", "url":"https://gateway/mcp", "approvals":{"tools":"*","mode":mode}}]
+                _, _, config = self.prepare()
+                self.assertEqual(config["mcp_servers"]["github"]["default_tools_approval_mode"], "prompt")
+
     def test_worker_has_no_leader_skills_and_gateway_keeps_route(self):
         model, prompt, config = self.prepare()
         self.assertEqual(model, "test-model")

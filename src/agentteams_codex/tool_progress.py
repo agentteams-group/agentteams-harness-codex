@@ -1,26 +1,29 @@
 """Project native tool items into the shared Matrix tool-card protocol."""
-import json
 import time
 
-from runtime_observability import redact
+from run_progress import progress_text, progress_value as bounded
 
 
 def run_id(event):
     task = event.get('recovery')
     if task:
-        return f"codex:task:{task['team_id']}:{task['task_id']}:{task['generation']}"
+        from runtime_control import task_run_id
+        return task_run_id(task['team_id'], task['task_id'], task['generation'])
     return f"codex:message:{event['room_id']}:{event['event_id']}"
-
-
-def bounded(value):
-    text = redact(json.dumps(value, ensure_ascii=False))
-    return json.loads(text) if len(text) <= 4096 else {"preview": text[:4096], "truncated": True}
 
 
 class ToolProgress:
     def __init__(self, matrix, event, run_id):
         self.matrix, self.event, self.run_id = matrix, event, run_id
         self.calls = {}
+
+    def finish(self, kind):
+        text = {"quiet": "本轮已结束", "cancelled": "本轮已停止", "failed": "本轮执行已中断，请核查失败记录"}[kind]
+        self.matrix.send_content(self.event["room_id"], {
+            "msgtype": "m.notice", "body": text, "org.agentteams.progress_only": True,
+            "org.agentteams.run": {"version": "1", "run_id": self.run_id,
+                "blocks": [{"type": "error", "payload": {"kind": kind}, "message": text}]},
+        }, f"codex:{self.event['event_id']}:{self.run_id}:end:{kind}")
 
     def update(self, method, item):
         if (self.event.get('_task_protocol_meta') or {}).get('teamharness_coordination', {}).get('kind') == 'assistant_digest':
@@ -29,10 +32,10 @@ class ToolProgress:
         if identity and method == 'item/completed' and (kind == 'reasoning' or (kind == 'agentMessage' and item.get('phase') == 'commentary')):
             text = '\n\n'.join(item.get('summary') or []) if kind == 'reasoning' else item.get('text', '')
             if text:
-                content = {'msgtype': 'm.notice', 'body': redact(text)[:4096],
+                content = {'msgtype': 'm.notice', 'body': progress_text(text),
                     'org.agentteams.progress_only': True, 'm.mentions': {'user_ids': []},
                     'org.agentteams.run': {'version': '1', 'run_id': self.run_id,
-                        'blocks': [{'type': 'thinking', 'content': redact(text)[:4096]}]}}
+                        'blocks': [{'type': 'thinking', 'content': progress_text(text)}]}}
                 self.matrix.send_content(self.event['room_id'], content,
                     f"codex:{self.event['event_id']}:{self.run_id}:summary:{identity}")
             return
@@ -82,10 +85,6 @@ class ToolProgress:
             if result is not None:
                 block['result'] = bounded(result)
         body = f'Codex {kind}: {name} · {status}'
-        details = {'arguments': block['arguments']}
-        if 'result' in block:
-            details['result'] = block['result']
-        body += '\n' + json.dumps(details, ensure_ascii=False)
         content = {'msgtype': 'm.text', 'body': body, 'org.agentteams.progress_only': True,
                    'm.mentions': {'user_ids': []},
                    'm.relates_to': {'m.in_reply_to': {'event_id': self.event['event_id']}},

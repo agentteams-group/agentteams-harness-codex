@@ -1,8 +1,8 @@
 # AgentTeams Codex Harness
 
-Run the unmodified Codex App Server as an AgentTeams-managed runtime. AT owns the member lifecycle, Matrix identity and storage; this adapter owns the Codex process, configuration, event journal and native session snapshots. Manager, Leader and Worker are roles of the same runtime.
+Run the pinned Codex App Server as an AgentTeams-managed runtime. AT owns the member lifecycle, Matrix identity and storage; this adapter owns the Codex process, configuration, event journal and native session snapshots. Manager, Leader and Worker are roles of the same runtime.
 
-Managers load the shared TeamHarness Manager prompts, resource-management and diagnosis Skills without requiring Team membership. Your Matrix adapter uses the Controller-owned Manager sender allow-list, requires mentions in group rooms and reports readiness after a successful Matrix sync. Select `runtime: codex` and an image containing this support on your Manager resource; the older v1.2.7 image supports Worker/Leader only. Your gateway route must support the Responses API.
+Managers load the shared TeamHarness Manager prompts, resource-management and diagnosis Skills without requiring Team membership. Your Matrix adapter uses the Controller-owned Manager sender allow-list, requires mentions in group rooms and reports readiness after a successful Matrix sync. Select `runtime: codex` and an image containing this support on your Manager resource; the older v1.2.7 image supports Worker/Leader only. Your gateway route must support the Responses API. Manager tools retain native permission checks and canonical Task admission; Worker tool checkpoints require an owned Worker execution and do not apply to Manager turns.
 
 Select your Harness at launch. Cross-Harness hot switching does not transfer Matrix cursors and can replay messages; that behavior is tracked separately in [Core #1631](https://github.com/agentscope-ai/AgentTeams/issues/1631). Same-Harness restarts retain the existing durable journal recovery.
 
@@ -104,3 +104,10 @@ python3 tests/project_e2e.py
 ```
 
 The live suite covers Controller provisioning, Matrix/model/MCP calls, multi-turn context, file ingress/egress, container replacement, cancellation, steering and Leader/Worker roles. It writes results to the ignored `artifacts/` directory. See `docs/acceptance.md` for measured results and remaining verification gaps.
+
+
+Managed turns pass their prepared Task context through the existing private native admission Scope file. The dedicated MCP child reads that frame when no standalone inline context is supplied; the managed App Server environment does not carry a duplicate serialized Task. This keeps large retained records out of operating-system argument/environment limits without changing Task authority or dropping context. The native admission fixture covers a large scope, successful durable receipts and unknown-operation refusal across restart.
+
+Task turns have no implicit one-hour Harness deadline. Set `CODEX_TASK_TIMEOUT_SECONDS` only when you explicitly want a wall-clock limit; native SDK errors, ownership changes and Human cancellation retain their existing behavior. Approval cards retain a bounded expiry independently of an unlimited Task turn.
+
+For preview servers used by a remote browser, run the server in a retained foreground `exec_command` session and keep its returned session ID. A shell child started with `nohup`/`&` may be reaped when the command finishes. Recheck process liveness after that boundary before diagnosing a browser network failure; stop the retained session after the test.

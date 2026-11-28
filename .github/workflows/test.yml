@@ -25,7 +25,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install -e ./harness
+      - run: python -m pip install -e './harness[test]'
       - run: make -C harness test AT_SOURCE=${{ github.workspace }}/at
       - run: bash -n harness/scripts/entrypoint.sh
       - name: Test the actual container Python and transport assets
@@ -34,13 +34,13 @@ jobs:
           docker run --rm --entrypoint mc codex-harness-test --version
           docker run --rm --user 65534:65534 --entrypoint mc codex-harness-test --version
           docker run --rm --entrypoint agt codex-harness-test worker report-ready --help
-          docker run --rm --entrypoint /opt/venv/bin/python3 \
+          docker run --rm --entrypoint sh \
             -e AT_SOURCE=/opt/agentteams/transport \
             -e AGENTTEAMS_PLUGIN_DIR=/opt/agentteams/plugins/teamharness \
             -e AT_ASSISTANT_TEST_SUPPORT=/at-tests \
             -v "${{ github.workspace }}/at/tests/lib:/at-tests:ro" \
             -v "${{ github.workspace }}/harness/tests:/tests:ro" \
-            codex-harness-test -m unittest discover -s /tests -v
+            codex-harness-test -ec '/opt/venv/bin/python3 -m pip install --target /tmp/test-deps "pytest>=9,<10"; PYTHONPATH=/tmp/test-deps:$PYTHONPATH /opt/venv/bin/python3 -m pytest /tests -v'
           docker run --rm --entrypoint /opt/venv/bin/python3 -v "${{ github.workspace }}/harness/tests:/tests:ro" \
             codex-harness-test /tests/native_input_smoke.py
           for decision in allow deny; do
@@ -58,5 +58,11 @@ jobs:
             -e 'CODEX_NATIVE_COMMAND=["codex-app-server"]' \
             -v "${{ github.workspace }}/harness/tests:/tests:ro" \
             codex-harness-test /tests/native_admission_smoke.py
+          docker run --rm --network none --entrypoint /opt/venv/bin/python3 \
+            -e AT_SOURCE=/at -e CODEX_NATIVE_APPROVAL_FIXTURE=true \
+            -e 'CODEX_NATIVE_COMMAND=["codex-app-server"]' \
+            -v "${{ github.workspace }}/at:/at:ro" \
+            -v "${{ github.workspace }}/harness/tests:/tests:ro" \
+            codex-harness-test /tests/native_task_protocol_smoke.py
       - name: Verify native stop and supplement against App Server
         run: make -C harness direct-control-smoke IMAGE=codex-harness-test VERSION=latest

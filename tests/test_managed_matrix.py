@@ -18,6 +18,40 @@ from worker_matrix_state import matrix_event_key
 
 
 class ManagedTests(unittest.TestCase):
+    def test_joined_task_room_survives_runtime_room_cache_refresh(self):
+        managed = ManagedMatrix.__new__(ManagedMatrix)
+        managed.joined = {"!task:test"}
+        managed.bridge = Mock(rooms={}, user_id="@dev:test", agent_ids=set(), config={})
+        managed.decode = Mock(return_value=[{"event_id": "$next"}])
+        with patch.dict(os.environ, {"AGENTTEAMS_MATRIX_DOMAIN": "test"}):
+            self.assertEqual(managed.event("!task:test", {"sender": "@leader:test"}),
+                             {"event_id": "$next"})
+        self.assertEqual(managed.bridge.rooms, {"!task:test": "team"})
+        managed.decode.reset_mock()
+        self.assertIsNone(managed.event("!unjoined:test", {}))
+        managed.decode.assert_not_called()
+
+    def test_task_room_followup_finds_only_own_assignment_and_workspace(self):
+        managed = ManagedMatrix.__new__(ManagedMatrix)
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            cwd = home / "tasks" / "exec-1" / "workspace"
+            cwd.mkdir(parents=True)
+            thread = "00000000-0000-4000-8000-000000000001"
+            sessions = home / "sessions"
+            sessions.mkdir()
+            (sessions / f"rollout-old-{thread}.jsonl").write_text(json.dumps({
+                "type": "session_meta", "payload": {"id": thread, "cwd": str(cwd)}}) + "\n")
+            records = {"assignment": {"thread_id": thread, "event": {"sender": "@dev:hs",
+                       "room_id": "!task:hs", "recovery": {"task_id": "exec-1"}}},
+                       "chat": {"thread_id": "unrelated", "event": {"room_id": "!task:hs"}}}
+            managed.bridge = Mock(home=home, user_id="@dev:hs")
+            managed.bridge.journal.data = {"events": records}
+            self.assertEqual(managed.task_room_session("!task:hs"), (thread, cwd))
+            self.assertIsNone(managed.task_room_session("!other:hs"))
+            records["assignment"]["event"]["sender"] = "@other:hs"
+            self.assertIsNone(managed.task_room_session("!task:hs"))
+
     def test_private_reply_mentions_projected_sender_without_team_roster_membership(self):
         for room_kind, sender, automatic, expected in [
             ("personal", "@manager:test", False, ["@manager:test"]),
@@ -228,8 +262,56 @@ class ManagedTests(unittest.TestCase):
         matrix.message.return_value = {"execution": {"checkpoint": {"operation": {"state":"started", "id":"op",
             "evidence": json.dumps([{"id":"call1"}])}}}}
         item = {"id":"call1","type":"commandExecution","status":"completed","exitCode":0}
-        for change in ({"status":"inProgress"}, {"exitCode":None}, {"exitCode":2}, {"id":"stale"}):
+        for change in ({"status":"inProgress"}, {"exitCode":None}, {"id":"stale"}):
             confirm_native_tool(matrix, identity, {**item, **change})
             matrix.message_finish_tools.assert_not_called()
         confirm_native_tool(matrix, identity, item)
         matrix.message_finish_tools.assert_called_once_with(identity,"op",[{"id":"call1","content":item}])
+
+    def test_terminal_command_failure_and_mcp_error_do_not_fence_following_tools(self):
+        matrix = Mock()
+        identity = {"event_key": "key"}
+        matrix.message.return_value = {"execution": {"checkpoint": {"operation": {"state":"started", "id":"op",
+            "evidence": json.dumps([{"id":"call1"}])}}}}
+        for item in [
+            {"id":"call1", "type":"commandExecution", "status":"completed", "exitCode":7},
+            {"id":"call1", "type":"commandExecution", "status":"failed", "exitCode":7},
+            {"id":"call1", "type":"mcpToolCall", "status":"completed", "result":{"isError":True, "content":[]}},
+        ]:
+            with self.subTest(item=item):
+                matrix.reset_mock()
+                confirm_native_tool(matrix, identity, item)
+                matrix.message_finish_tools.assert_called_once_with(identity, "op", [{"id":"call1", "content":item, "status":"error"}])
+        matrix.reset_mock()
+        confirm_native_tool(matrix, identity, {"id":"call1", "type":"mcpToolCall", "status":"failed", "error":{"message":"connection lost"}})
+        matrix.message_finish_tools.assert_not_called()
+
+
+class InactivePhaseTests(unittest.TestCase):
+    def test_retired_phase_retires_input_without_model_delivery_or_retry(self):
+        from agentteams_codex.task_protocol import InactiveTaskPhase
+        managed = ManagedMatrix.__new__(ManagedMatrix)
+        managed.matrix = matrix = Mock()
+        identity = {'generation': 3}
+        matrix.message.return_value = {'recovery': 'resume'}
+        matrix.message_claim.return_value = {'identity': identity, 'recovery': 'resume',
+            'execution': {'checkpoint': {}}, 'checkpoint_digest': 'digest',
+            'input': {'room_id': '!old:test', 'event_id': '$old'}}
+        managed.bridge = bridge = Mock()
+        bridge.run_turn.side_effect = InactiveTaskPhase('Controller retired phase')
+        record = {'event': {'shared_key':'key', 'room_id':'!old:test', 'event_id':'$old',
+                  'body':'old notification', '_task_protocol_meta': {'teamharness_coordination': {'id':'a'*32}}},
+                  'outbox_before': []}
+        sessions = Mock()
+        sessions.load.return_value = {'generation':3, 'checkpoint_digest':'digest', 'config_generation':1}
+        sessions.usable.return_value = False
+        with patch('agentteams_codex.managed_matrix.WorkerSessions', return_value=sessions), \
+             patch('agentteams_codex.managed_matrix.rollout_digest', return_value=None), \
+             patch('agentteams_codex.managed_matrix.requires_room_history', return_value=False), \
+             patch('agentteams_codex.managed_matrix.raw_room_history', return_value=[]):
+            managed.message_turn(record)
+        self.assertEqual(record['status'], 'superseded')
+        matrix.message_cancel.assert_called_once_with(identity)
+        bridge.persist_codex.assert_not_called()
+        matrix.message_delivered.assert_not_called()
+        bridge.journal.save.assert_called_once()
