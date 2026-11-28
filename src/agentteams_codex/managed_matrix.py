@@ -11,6 +11,7 @@ from agentteams_receipts import Receipts
 from matrix_channel import matrix_transaction_id
 from matrix_bridge import (changed_outbox_files, reply_mention_user_ids, snapshot_outbox,
                            source_agent_reply_user_id, workspace_output_path)
+from task_coordination import requires_room_history
 from task_recovery import Recovery, RecoveryConflict
 from worker_matrix_delivery import confirm_bound
 from worker_matrix_raw import RawWorkerSync, publish_raw_saved, raw_room_history, require_unencrypted_room
@@ -19,6 +20,7 @@ from worker_sessions import WorkerSessions
 from worker_matrix_state import WorkerMatrix, matrix_event_key
 
 from .native_input import commit_source, rollout_digest, rollout_path
+from .task_protocol import InactiveTaskPhase
 
 
 class ManagedMatrix:
@@ -54,7 +56,9 @@ class ManagedMatrix:
             return None
         bridge = self.bridge
         policy = bridge.config.get("desired", {}).get("channelPolicy", {})
-        personal = bridge.rooms[room] == "personal"
+        # Runtime refresh only reloads configured rooms. A verified joined Task
+        # room remains a group even when absent from that refreshed projection.
+        personal = bridge.rooms.setdefault(room, "team") == "personal"
         deny_key = "dmDenyExtra" if personal else "groupDenyExtra"
         domain = os.environ["AGENTTEAMS_MATRIX_DOMAIN"]
         denied = {value if value == "*" or (value.startswith("@") and ":" in value)
@@ -84,6 +88,8 @@ class ManagedMatrix:
         return None
 
     def control(self, event):
+        if self.bridge.task_supplement(event):
+            event = {**event, "body": "/steer " + event["body"]}
         control = event.get("execution_control")
         verb = event["body"].partition(" ")[0]
         if control is None and "answer" not in event and verb not in {"/cancel", "/steer", "/approve", "/reject", "/answer"}:
@@ -127,7 +133,8 @@ class ManagedMatrix:
             if not item:
                 raise RecoveryConflict("Missing retained Matrix input")
             room = item["room_id"]
-            if room not in self.joined or snapshot["state"]["rooms"].get(room, {}).get("gaps"):
+            if (room not in self.joined or (snapshot["state"]["rooms"].get(room, {}).get("gaps")
+                    and requires_room_history(item, self.bridge.user_id))):
                 continue
             self.raw.require_room(room)
             raw = {**item["input"], "room_id": room, "event_id": item["event_id"]}
@@ -179,8 +186,6 @@ class ManagedMatrix:
         work = event.get("recovery")
         if work:
             snapshot = matrix.load()
-            if snapshot["state"]["rooms"].get(room, {}).get("gaps"):
-                return
             keys = snapshot["state"]["pending"]
         else:
             keys = [event["shared_key"]]
@@ -301,7 +306,7 @@ class ManagedMatrix:
                     task_ref, current["room_workdir"] = session
                     if ref is None and not claim["execution"].get("checkpoint"):
                         current["thread_id"] = task_ref
-            if current["thread_id"] is None:
+            if current["thread_id"] is None and requires_room_history(claim["input"], self.bridge.user_id):
                 history = raw_room_history(self.bridge.matrix, matrix, self.bridge.user_id, event["room_id"],
                                            event["event_id"], self.event)
                 if history:
@@ -312,7 +317,15 @@ class ManagedMatrix:
             if "outbox_before" not in record:
                 record["outbox_before"] = snapshot_outbox(self.bridge.workspace)
                 self.bridge.journal.save()
-            answer = self.bridge.run_turn(current, record)
+            try:
+                answer = self.bridge.run_turn(current, record)
+            except InactiveTaskPhase:
+                # The Controller's phase receipt is terminal. Retire this
+                # admitted input instead of retrying it ahead of new work.
+                matrix.message_cancel(identity)
+                record["status"] = "superseded"
+                self.bridge.journal.save()
+                return
             self.bridge.persist_codex()
             if record.get("stopped"):
                 matrix.message_cancel(identity)

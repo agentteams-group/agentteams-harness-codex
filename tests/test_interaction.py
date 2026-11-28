@@ -5,6 +5,7 @@ import queue
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -44,7 +45,7 @@ for line in sys.stdin:
 
 
 class InteractionTests(unittest.TestCase):
-    def run_case(self, method, command, stale_context=False, questions=None, responses=None, structured=False, termination=None):
+    def run_case(self, method, command, stale_context=False, questions=None, responses=None, structured=False, termination=None, elapsed=0):
         with (
             tempfile.TemporaryDirectory() as temporary,
             patch.dict(os.environ, {}, clear=True),
@@ -120,8 +121,10 @@ class InteractionTests(unittest.TestCase):
                     bridge.handle_control({**event, "body": "已提交选择", "answer": answer})
             bridge.matrix.send_content.side_effect = respond_card
 
+            clock = time.monotonic
+            offset = [0]
             def factory(*args, **kwargs):
-                return Client(
+                client = Client(
                     *args,
                     command=[
                         sys.executable,
@@ -132,6 +135,14 @@ class InteractionTests(unittest.TestCase):
                     **kwargs,
                 )
 
+                next_event = client.next_event
+                def advance(*args, **kwargs):
+                    event = next_event(*args, **kwargs)
+                    offset[0] = elapsed
+                    return event
+                client.next_event = advance
+                return client
+
             with (
                 patch(
                     "agentteams_codex.bridge.prepare",
@@ -139,6 +150,7 @@ class InteractionTests(unittest.TestCase):
                 ),
                 patch("agentteams_codex.bridge.prepare_turn", return_value=({'role': 'worker', 'sources': [], 'sourceEvent': '$request'}, '', None)),
                 patch("agentteams_codex.bridge.Client", side_effect=factory),
+                patch("agentteams_codex.bridge.time.monotonic", side_effect=lambda: clock() + offset[0]),
             ):
                 if termination == 'expired':
                     with self.assertRaises(TimeoutError):
@@ -147,7 +159,8 @@ class InteractionTests(unittest.TestCase):
                     result = bridge.run_turn(event, {"status": "queued"})
             if termination:
                 receipts = [call.args[1]['org.agentteams.run']['blocks'][0]
-                            for call in bridge.matrix.send_content.call_args_list]
+                            for call in bridge.matrix.send_content.call_args_list
+                            if 'status' in call.args[1]['org.agentteams.run']['blocks'][0]]
                 self.assertEqual([card['status'] for card in receipts], ['pending', termination])
                 self.assertEqual(receipts[0]['confirmation_id'], receipts[1]['confirmation_id'])
                 self.assertEqual(bridge.pending_requests, {})
@@ -166,6 +179,10 @@ class InteractionTests(unittest.TestCase):
             else:
                 self.assertEqual(approvals, [])
             return json.loads(result)
+
+    def test_normal_native_turn_has_no_implicit_one_hour_cutoff(self):
+        self.assertEqual(self.run_case("item/commandExecution/requestApproval",
+            "/approve human-request", elapsed=3601), {"decision": "accept"})
 
     def test_human_accepts_command_approval(self):
         self.assertEqual(
@@ -223,6 +240,7 @@ class InteractionTests(unittest.TestCase):
     def test_only_requesting_human_or_admin_can_resolve(self):
         bridge = Bridge.__new__(Bridge)
         bridge.config = {"team": {"admin": {"matrixUserId": "@admin:test"}}}
+        bridge.user_id = "@codex:test"
         bridge.agent_ids = {"@worker:test"}
         bridge.controls = queue.Queue()
         bridge.active = {"event": {"room_id": "!room:test", "sender": "@human:test"}, "thread_id": "thread", "turn_id": "turn"}

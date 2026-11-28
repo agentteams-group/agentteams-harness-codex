@@ -1,0 +1,185 @@
+diff --git a/codex-rs/core/src/lib.rs b/codex-rs/core/src/lib.rs
+index aa29dbe..9fa6710 100644
+--- a/codex-rs/core/src/lib.rs
++++ b/codex-rs/core/src/lib.rs
+@@ -53,6 +53,7 @@ mod image_preparation;
+ mod installation_id;
+ pub(crate) mod landlock;
+ mod native_admission;
++mod native_trace_content;
+ pub use landlock::spawn_command_under_linux_sandbox;
+ pub(crate) mod mcp;
+ mod mcp_skill_dependencies;
+diff --git a/codex-rs/core/src/native_trace_content.rs b/codex-rs/core/src/native_trace_content.rs
+new file mode 100644
+index 0000000..b571e31
+--- /dev/null
++++ b/codex-rs/core/src/native_trace_content.rs
+@@ -0,0 +1,66 @@
++//! Capture native request/tool payloads under the shared content policy.
++use regex_lite::Regex;
++use serde_json::Value;
++use std::sync::LazyLock;
++
++static SECRET_KEY: LazyLock<Regex> = LazyLock::new(|| {
++    Regex::new(r"(?i)api[_-]?key|secret|password|authorization|access[_-]?token|gateway[_-]?key|credential|license[_-]?key|security[_-]?token|OTEL_EXPORTER_OTLP(?:_TRACES)?_HEADERS").expect("valid credential field pattern")
++});
++static BEARER: LazyLock<Regex> =
++    LazyLock::new(|| Regex::new(r#"(?i)Bearer\s+[^\s\"',]+"#).expect("valid bearer pattern"));
++
++pub(crate) fn content(value: Value) -> String {
++    let credentials: Vec<String> = std::env::vars()
++        .filter(|(key, value)| SECRET_KEY.is_match(key) && value.len() >= 8)
++        .map(|(_, value)| value)
++        .collect();
++    serde_json::to_string(&sanitize(value, &credentials)).unwrap_or_default()
++}
++
++fn sanitize(value: Value, credentials: &[String]) -> Value {
++    match value {
++        Value::Object(fields) => Value::Object(
++            fields
++                .into_iter()
++                .map(|(key, value)| {
++                    let value = if SECRET_KEY.is_match(&key) {
++                        Value::String("[REDACTED]".into())
++                    } else {
++                        sanitize(value, credentials)
++                    };
++                    (key, value)
++                })
++                .collect(),
++        ),
++        Value::Array(values) => Value::Array(
++            values
++                .into_iter()
++                .map(|v| sanitize(v, credentials))
++                .collect(),
++        ),
++        Value::String(mut text) => {
++            for credential in credentials {
++                text = text.replace(credential, "[REDACTED]");
++            }
++            Value::String(BEARER.replace_all(&text, "Bearer [REDACTED]").into_owned())
++        }
++        other => other,
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use serde_json::json;
++
++    #[test]
++    fn keeps_returned_reasoning_and_redacts_credentials_without_mutating_input() {
++        let original = json!({"content": [{"type":"reasoning", "text":"returned reasoning"}],
++                             "password":"private-value", "output":"known-credential Bearer opaque-token"});
++        let clean = sanitize(original.clone(), &["known-credential".into()]);
++        assert_eq!(clean["content"], original["content"]);
++        assert_eq!(clean["password"], "[REDACTED]");
++        assert_eq!(clean["output"], "[REDACTED] Bearer [REDACTED]");
++        assert_eq!(original["password"], "private-value");
++    }
++}
+diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
+index 515edde..77c75f6 100644
+--- a/codex-rs/core/src/session/turn.rs
++++ b/codex-rs/core/src/session/turn.rs
+@@ -1926,9 +1926,13 @@ async fn try_run_sampling_request(
+     .await?;
+     // This span owns the actual model request through response.completed.
+     // Tool futures are drained later and must not extend inference duration.
++    let capture_content = turn_context.config.otel.log_user_prompt;
++    let mut captured_output = Vec::new();
+     let mut generation_span = Some(tracing::info_span!("gen_ai.chat",
+         langfuse.observation.type = "generation",
+         agentteams.model.purpose = "task",
++        langfuse.observation.input = field::Empty,
++        langfuse.observation.output = field::Empty,
+         gen_ai.operation.name = "chat",
+         gen_ai.request.model = %turn_context.model_info.slug,
+         gen_ai.usage.input_tokens = field::Empty,
+@@ -1938,6 +1942,10 @@ async fn try_run_sampling_request(
+         success = false,
+         error.type = field::Empty,
+     ));
++    if capture_content && let Some(span) = generation_span.as_ref() {
++        let input = crate::native_trace_content::content(serde_json::json!({"messages": &prompt.input, "instructions": &prompt.base_instructions.text}));
++        span.record("langfuse.observation.input", input.as_str());
++    }
+     let mut stream = crate::native_admission::MODEL_ADMITTED
+         .scope(
+             (),
+@@ -2013,6 +2021,9 @@ async fn try_run_sampling_request(
+         match event {
+             ResponseEvent::Created => {}
+             ResponseEvent::OutputItemDone(item) => {
++                if capture_content {
++                    captured_output.push(serde_json::to_value(&item).unwrap_or_default());
++                }
+                 if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
+                     && let Ok(Some(event)) = consumer.finish()
+                 {
+@@ -2242,6 +2253,10 @@ async fn try_run_sampling_request(
+                 ..
+             } => {
+                 if let Some(span) = generation_span.take() {
++                    if capture_content {
++                        let output = crate::native_trace_content::content(serde_json::Value::Array(captured_output));
++                        span.record("langfuse.observation.output", output.as_str());
++                    }
+                     span.record("success", true);
+                     if let Some(usage) = token_usage.as_ref() {
+                         span.record("gen_ai.usage.input_tokens", usage.input_tokens);
+diff --git a/codex-rs/core/src/tools/registry.rs b/codex-rs/core/src/tools/registry.rs
+index 600693f..9b65780 100644
+--- a/codex-rs/core/src/tools/registry.rs
++++ b/codex-rs/core/src/tools/registry.rs
+@@ -546,8 +546,15 @@ impl ToolRegistry {
+             langfuse.observation.type = "tool",
+             tool.name = %tool_name_flat,
+             tool.call_id = %call_id_owned,
++            langfuse.observation.input = tracing::field::Empty,
++            langfuse.observation.output = tracing::field::Empty,
+             success = false,
+         );
++        let capture_content = invocation.turn.config.otel.log_user_prompt;
++        if capture_content {
++            let input = serde_json::from_str(log_payload.as_ref()).unwrap_or_else(|_| serde_json::Value::String(log_payload.to_string()));
++            native_tool_span.record("langfuse.observation.input", crate::native_trace_content::content(input).as_str());
++        }
+         let result = otel
+             .log_tool_result_with_tags(
+                 tool_name_flat.as_ref(),
+@@ -573,6 +580,14 @@ impl ToolRegistry {
+                 },
+             )
+             .await;
++        if capture_content {
++            let response = response_cell.lock().await;
++            let output = match response.as_ref() {
++                Some(response) => serde_json::to_value(response.result.to_response_item(&response.call_id, &response.payload)).unwrap_or_default(),
++                None => serde_json::json!({"error": result.as_ref().err().map(ToString::to_string)}),
++            };
++            native_tool_span.record("langfuse.observation.output", crate::native_trace_content::content(output).as_str());
++        }
+         native_tool_span.record("success", matches!(&result, Ok((_, true))));
+         drop(native_tool_span);
+         let success = match &result {
+diff --git a/codex-rs/otel/src/provider.rs b/codex-rs/otel/src/provider.rs
+index 305b09e..ce38d48 100644
+--- a/codex-rs/otel/src/provider.rs
++++ b/codex-rs/otel/src/provider.rs
+@@ -186,7 +186,10 @@ impl OtelProvider {
+     }
+ 
+     pub fn trace_export_filter(meta: &tracing::Metadata<'_>) -> bool {
+-        meta.is_span() || is_trace_safe_target(meta.target())
++        // Task telemetry retains semantic model/tool spans. SDK diagnostics
++        // (HTTP polling, config snapshots, persistence) remain local tracing.
++        (meta.is_span() && meta.fields().field("langfuse.observation.type").is_some())
++            || is_trace_safe_target(meta.target())
+     }
+ 
+     pub fn metrics(&self) -> Option<&MetricsClient> {

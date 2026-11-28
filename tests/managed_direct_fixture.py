@@ -33,6 +33,8 @@ class Controller(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path)
+        if path.path == '/api/v1/tasks/room-context':
+            return self.reply({})
         if path.path == '/api/v1/runtime/matrix':
             return self.reply(self.server.snapshot)
         if path.path == '/api/v1/runtime/sessions':

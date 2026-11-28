@@ -23,6 +23,7 @@ class CodexError(RuntimeError):
 
 class Client:
     def __init__(self, workspace: Path, *, command=None, env=None, timeout=60, trace_context=None):
+        self.approval_policy = (os.environ if env is None else env).get('CODEX_APPROVAL_POLICY', 'never')
         self.trace_context = {key: value for key, value in (trace_context or {}).items()
                               if key in {"traceparent", "tracestate"} and isinstance(value, str)}
         self.proc = subprocess.Popen(
@@ -114,7 +115,7 @@ class Client:
             "cwd": str(workspace),
             "model": model,
             "developerInstructions": instructions,
-            "approvalPolicy": os.getenv("CODEX_APPROVAL_POLICY", "never"),
+            "approvalPolicy": self.approval_policy,
             "sandbox": os.getenv("CODEX_SANDBOX_MODE", "workspace-write"),
         }
         if thread_id:

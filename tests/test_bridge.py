@@ -29,6 +29,19 @@ from agentteams_codex.client import CodexError
 
 
 class StateTests(unittest.TestCase):
+    def test_manager_skips_completed_source_from_another_runtime_before_native_dispatch(self):
+        from agentteams_receipts import Receipts
+        with tempfile.TemporaryDirectory() as temporary:
+            receipts = Receipts(temporary)
+            receipts.enqueue('!private:test', '$done', 'completed')
+            bridge = Bridge.__new__(Bridge)
+            bridge.manager_receipts = receipts
+            bridge.journal = Mock()
+            record = {'event': {'room_id': '!private:test', 'event_id': '$done'}, 'status': 'queued'}
+            bridge.process('$done', record)
+            self.assertEqual(record['status'], 'completed')
+            bridge.journal.save.assert_called_once()
+
     def test_recovered_quiet_phase_retains_delivery_body_without_restarting_model(self):
         with tempfile.TemporaryDirectory() as temporary:
             bridge = Bridge.__new__(Bridge)
@@ -43,7 +56,7 @@ class StateTests(unittest.TestCase):
             bridge.journal.ingest([event], 'cursor')
             with patch('agentteams_codex.bridge.prepare', return_value=('model', 'instructions')), \
                  patch('agentteams_codex.bridge.prepare_turn', return_value=(
-                     {'role': 'leader', 'sources': [], 'sourceEvent': '$planning'}, '', None)), \
+                     {'role': 'leader', 'sources': [], 'sourceEvent': '$planning', 'retained': 'x' * 200000}, '', None)), \
                  patch('agentteams_codex.bridge.NativeScope') as scope, \
                  patch('agentteams_codex.bridge.completed_answer', return_value='[Task system receipt] saved'), \
                  patch('agentteams_codex.bridge.Client') as factory:
@@ -55,6 +68,10 @@ class StateTests(unittest.TestCase):
                                  '[Task system receipt] saved')
                 self.assertEqual(Journal(bridge.journal.path).data['events']['$planning']['task_presentation'], '')
                 client.start.assert_not_called()
+                native_env = factory.call_args.kwargs['env']
+                self.assertNotIn('AGENTTEAMS_CODEX_TASK_CONTEXT', native_env)
+                self.assertIn('AGENTTEAMS_CODEX_NATIVE_SCOPE', native_env)
+                self.assertEqual(scope.call_args.args[2]['retained'], 'x' * 200000)
 
     def test_read_checkpoint_requires_native_user_input_and_a_successful_snapshot(self):
         bridge = Bridge.__new__(Bridge)
@@ -257,6 +274,31 @@ class StateTests(unittest.TestCase):
                 bridge.matrix.send_content.call_args_list[0],
                 bridge.matrix.send_content.call_args_list[1],
             )
+
+    def test_verified_private_peer_can_steer_a_self_originated_turn(self):
+        bridge = Bridge.__new__(Bridge)
+        bridge.user_id = '@worker:matrix'
+        bridge.config = {}
+        bridge.agent_ids = {'@other-agent:matrix'}
+        bridge.rooms = {'!dm': 'personal'}
+        bridge.matrix = Mock()
+        bridge.matrix.request.return_value = {'joined': {'@worker:matrix': {}, '@human:matrix': {}}}
+        scheduled = {'event_id': '$scheduled', 'room_id': '!dm', 'sender': bridge.user_id}
+        self.assertTrue(bridge.direct_member(scheduled))
+        bridge.active = {'event': scheduled, 'thread_id': 'thread', 'turn_id': 'turn'}
+        bridge.journal = Mock()
+        bridge.journal.data = {'cursor': 'verified-cursor'}
+        bridge.controls = queue.Queue()
+        bridge.reply = Mock()
+        bridge.task_supplement = Mock(return_value=False)
+        event = {'event_id': '$human', 'room_id': '!dm', 'sender': '@human:matrix', 'body': 'new input',
+                 'execution_control': {'action': 'steer', 'agent_id': bridge.user_id, 'run_id': '$scheduled'}}
+        self.assertTrue(bridge.handle_control(event))
+        self.assertEqual(bridge.controls.get()[1], '/steer')
+        bridge.matrix.request.return_value['joined']['@third:matrix'] = {}
+        self.assertFalse(bridge.direct_member(scheduled))
+        bridge.handle_control(event)
+        self.assertTrue(bridge.controls.empty())
 
     def test_control_is_scoped_to_room_and_requesting_human(self):
         bridge = Bridge.__new__(Bridge)

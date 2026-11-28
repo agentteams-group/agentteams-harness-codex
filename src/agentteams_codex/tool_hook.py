@@ -27,21 +27,24 @@ def checkpoint_tool(matrix, identity, hook):
 
 
 def confirm_native_tool(matrix, identity, item):
-    """Only a terminal SDK item with a known successful outcome verifies the operation."""
+    """Settle terminal native outcomes, including failures with possible partial effects."""
     kind = item.get("type")
     no_effect = native_task_metadata(item).get('effect') == 'none'
-    if item.get("status") != "completed" and not (item.get('status') == 'failed' and no_effect):
+    if item.get("status") not in {"completed", "failed"}:
         return
+    failed = False
     if kind == "commandExecution":
-        if item.get("exitCode") != 0:
+        if type(item.get("exitCode")) is not int:
             return
+        failed = item["exitCode"] != 0
     elif kind == "mcpToolCall":
-        if not no_effect and (item.get("error") or not isinstance(item.get("result"), dict) or item["result"].get("isError")):
+        if not no_effect and (item.get("status") != "completed" or item.get("error") or not isinstance(item.get("result"), dict)):
             return
+        failed = no_effect or item["result"].get("isError") is True
     elif kind == "dynamicToolCall":
-        if item.get("success") is not True:
+        if item.get("status") != "completed" or item.get("success") is not True:
             return
-    elif kind != "fileChange":
+    elif kind != "fileChange" or item.get("status") != "completed":
         return
     execution = matrix.message(identity["event_key"])["execution"]
     operation = (execution.get("checkpoint") or {}).get("operation") or {}
@@ -49,7 +52,10 @@ def confirm_native_tool(matrix, identity, item):
         return
     calls = json.loads(operation["evidence"])
     if len(calls) == 1 and calls[0]["id"] == item["id"]:
-        matrix.message_finish_tools(identity, operation["id"], [{"id": item["id"], "content": item}])
+        receipt = {"id": item["id"], "content": item}
+        if failed:
+            receipt["status"] = "error"
+        matrix.message_finish_tools(identity, operation["id"], [receipt])
 
 
 def check_phase_tool(context, hook):
@@ -74,6 +80,10 @@ def scoped_tool(frame, hook):
         return
     recovery = frame.get('recovery')
     if not recovery:
+        # Manager turns use canonical Task authority and native tool permissions;
+        # they do not own the Worker execution journal.
+        if frame['context'].get('role') == 'manager':
+            return
         raise RecoveryConflict('Native tool requires a durable execution admission')
     request = {'identity': recovery['identity'], 'runtime': 'codex', 'device_delivery': True}
     prefix = '' if recovery['kind'] == 'task' else 'matrix.message.'
@@ -91,8 +101,14 @@ def scoped_tool(frame, hook):
     calls = json.loads(operation.get('evidence', '[]')) if operation.get('state') == 'started' else []
     if len(calls) != 1 or calls[0]['id'] != hook['tool_use_id']:
         raise RecoveryConflict('Native tool response does not own the started operation')
+    response = hook['tool_response']
+    receipt = {'id': hook['tool_use_id'], 'content': response}
+    # Native MCP PostToolUse exposes CallToolResult directly. User content
+    # inside structuredContent is not the protocol's failure flag.
+    if hook['tool_name'].startswith('mcp__') and isinstance(response, dict) and response.get('isError') is True:
+        receipt['status'] = 'error'
     execute({**request, 'action': prefix + 'finish_tools', 'operation_id': operation['id'],
-             'results': [{'id': hook['tool_use_id'], 'content': hook['tool_response']}]})
+             'results': [receipt]})
 
 
 def main():
@@ -111,6 +127,19 @@ def main():
             if scoped:
                 checkpoint_tool(WorkerMatrix("codex", device_delivery=True), json.loads(scoped), hook)
     except Exception as error:
+        if frame and hook.get("hook_event_name") == "PreToolUse":
+            from .admission import ENV, locked, write
+            from pathlib import Path
+            from task_recovery import Recovery
+            path = Path(os.environ[ENV])
+            with locked(path):
+                saved = json.loads(path.read_text())
+                denied = saved.setdefault("denied_tools", {})
+                denied[hook["tool_use_id"]] = {
+                    "id": hook["tool_use_id"], "name": hook["tool_name"],
+                    "arguments_sha256": Recovery.digest(hook["tool_input"]),
+                    "error": type(error).__name__}
+                write(path, saved)
         print(f"Worker tool checkpoint requires verification ({type(error).__name__})", file=sys.stderr)
         sys.exit(2)
 

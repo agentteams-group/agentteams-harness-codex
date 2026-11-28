@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 import subprocess
 import sys
+import pytest
 
 from agentteams_codex import task_protocol
 from agentteams_codex.config import prepare
@@ -151,10 +152,12 @@ def test_native_trace_attributes_use_trusted_ids_and_authoritative_generation():
     config = {'member': {'runtimeName': 'worker-one'}, 'team': {'name': 'team'}}
     event = {'event_id': '$matrix', 'room_id': '!room:test',
              '_task_protocol_meta': {'teamharness_coordination': {'id': 'coord', 'kind': 'task_assigned'}}}
-    scope = {'execution': 'task-one', 'context': {'generation': 7},
+    scope = {'execution': 'task-one', 'context': {'generation': 7, 'task': {'mainTaskId': 'main-one'}},
              'sources': [{'eventId': '$original'}]}
     attrs = trace_attributes(config, event, scope)
     assert attrs['agentteams.execution.generation'] == '7'
+    assert attrs['agentteams.main_task.id'] == 'main-one'
+    assert attrs['gen_ai.agent.id'] == 'worker-one'
     assert attrs['agentteams.coordination.id'] == 'coord'
     assert attrs['agentteams.input.event_ids'] == '["$original"]'
     assert attrs['agentteams.event.id'] == '$matrix'
@@ -314,3 +317,51 @@ def test_planning_trace_uses_the_same_run_as_matrix_and_only_one_authoritative_t
     assert one['agentteams.run.id'] == run_id(event)
     multiple = trace_attributes(config, event, {'planning': ['main-one', 'main-two']})
     assert 'agentteams.task.id' not in multiple
+
+
+@pytest.mark.parametrize('reason', ['settled', 'reused', 'replaced', 'failed'])
+def test_terminal_phase_admission_has_a_distinct_no_model_disposition(tmp_path, reason):
+    async def notify(*args):
+        return {'active': False, reason: True}
+    prepare = Mock()
+    modules = {'task_receipt': SimpleNamespace(), 'task_cli': SimpleNamespace(run=Mock()),
+               'phase_recovery': SimpleNamespace(notify=notify),
+               'task_context': SimpleNamespace(prepare_event=prepare)}
+    event = {'event_id': '$old-phase', 'room_id': '!old:test', 'sender': '@leader:test',
+             '_task_protocol_meta': {'teamharness_coordination': {'id':'a'*32,'kind':'handoff'}}}
+    with patch.object(task_protocol, 'common', side_effect=lambda _,name: modules[name]):
+        with pytest.raises(task_protocol.InactiveTaskPhase):
+            task_protocol.prepare_turn(tmp_path, 'team_leader', event)
+    prepare.assert_not_called()
+
+
+def test_unknown_inactive_phase_is_not_retired_as_terminal(tmp_path):
+    async def notify(*args):
+        return {'active': False}
+    modules = {'task_receipt': SimpleNamespace(), 'task_cli': SimpleNamespace(run=Mock()),
+               'phase_recovery': SimpleNamespace(notify=notify)}
+    event = {'event_id': '$unknown', 'room_id': '!room:test', 'sender': '@leader:test',
+             '_task_protocol_meta': {'teamharness_coordination': {'id':'a'*32,'kind':'handoff'}}}
+    with patch.object(task_protocol, 'common', side_effect=lambda _,name: modules[name]):
+        with pytest.raises(ValueError) as error:
+            task_protocol.prepare_turn(tmp_path, 'team_leader', event)
+    assert not isinstance(error.value, task_protocol.InactiveTaskPhase)
+
+
+def test_native_stdio_reads_large_task_context_from_existing_private_scope(tmp_path):
+    source = Path(os.environ['AT_SOURCE'])
+    scope = tmp_path / 'native-scope.json'
+    context = {'role': 'leader', 'planning': 'main', 'sourceEvent': '$source',
+               'retained': '原始记录' * 20000}
+    scope.write_text(json.dumps({'context': context}))
+    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src'),
+           'AGENTTEAMS_PLUGIN_DIR': str(source / 'plugins/teamharness'),
+           'AGENTTEAMS_CODEX_NATIVE_SCOPE': str(scope)}
+    env.pop(task_protocol.CONTEXT_ENV, None)
+    result = subprocess.run([sys.executable, '-m', 'agentteams_codex.task_protocol'],
+        input=json.dumps({'id': 1, 'method': 'tools/list'}) + '\n', capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+    schema = json.loads(result.stdout)['result']['tools'][0]
+    assert schema['name'] == 'task'
+    assert 'overview' in schema['description']
+    assert json.loads(scope.read_text())['context'] == context

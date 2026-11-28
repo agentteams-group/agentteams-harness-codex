@@ -12,6 +12,8 @@ RUN git clone --depth 1 --branch rust-v0.143.0 https://github.com/openai/codex.g
     && test "$(git -C /build/codex rev-parse HEAD)" = "${CODEX_SDK_REF}"
 COPY patches/codex-durable-user-input.patch /tmp/codex-durable-user-input.patch
 RUN git -C /build/codex apply /tmp/codex-durable-user-input.patch
+COPY patches/codex-trace-content.patch /tmp/codex-trace-content.patch
+RUN git -C /build/codex apply /tmp/codex-trace-content.patch
 WORKDIR /build/codex/codex-rs
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \

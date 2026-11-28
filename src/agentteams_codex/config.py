@@ -11,6 +11,14 @@ from task_recovery import enabled as managed_worker
 from worker_runtime_config import project
 from agentteams_skill_warnings import check_skill, report_warnings
 from .native_telemetry import configuration as native_telemetry_configuration
+from runtime_control import approval_mode, mcp_approval
+
+
+def native_approval_policy(config):
+    # "never" rejects escalations. Keep native requests enabled so the adapter
+    # can return an explicit grant for the platform's automatic mode.
+    return {'ask': 'on-request', 'allow': 'on-request'}.get(
+        approval_mode(config), os.getenv('CODEX_APPROVAL_POLICY', 'never'))
 
 
 def read_runtime(path: Path) -> dict:
@@ -151,6 +159,7 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
         "" if any((task_scope or {}).get(key) for key in ("execution", "planning", "review", "completion")) else
         "Files received from Matrix are in inbox/. Read them with your tools. Put files you intend to return in outbox/. Reply directly in the current room; do not send the same reply again through MCP.",
         "Use your native TeamHarness task tool for Task operations. The task system prepares inputs, advances accepted dependencies and delivers results to the original conversation automatically. Read its receipts; do not duplicate notifications.",
+        "Keep a preview server needed by later tools in a foreground exec_command session with a short yield_time_ms, and retain its returned session ID. A nohup or ampersand child can be reaped when its launching command exits. Verify the server is still alive when probing its reachable address from the remote browser; connection refusal alone does not establish network isolation. Stop only your own server session after testing.",
     ]
     if (task_scope or {}).get("planning"):
         context.append("你正在任务房间规划。先分析需求和成员分工，再一次性调用 task plan，提供 overview：用中文说明任务目标、必要要求、验收标准、实际节点分工和最终产物。不要整段复述原始提示词。系统只在规划保存后发布这条概要，确认发布后才派发首个节点；你不要再发送受理回执或重复概要。")
@@ -178,7 +187,7 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
     model = model_config.get("model") or os.getenv("CODEX_MODEL", "gpt-5.3-codex")
     lines = [
         f"model = {json.dumps(model)}",
-        'approval_policy = "never"',
+        f'approval_policy = {json.dumps(native_approval_policy(config))}',
         'sandbox_mode = "workspace-write"',
     ]
     gateway = model_config["gatewayUrl"] if managed_worker() else (
@@ -240,6 +249,10 @@ def prepare(config: dict, home: Path, workspace: Path, plugin: Path, *, trace_at
                 "MCP server names must be unique and must not replace teamharness"
             )
         lines.append(f"[mcp_servers.{json.dumps(name)}]")
+        if mcp_approval(config, name) in {"ask", "allow"}:
+            # Keep the SDK asking at its native boundary. The bridge resolves
+            # every call using the current AT policy, including hot changes.
+            lines.append('default_tools_approval_mode = "prompt"')
         if server.get("url"):
             if server.get("transport", "http") != "http":
                 raise ValueError(

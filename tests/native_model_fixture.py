@@ -28,9 +28,16 @@ class Model(BaseHTTPRequestHandler):
         else:
             item = {'id': 'msg_continued', 'type': 'message', 'role': 'assistant', 'status': 'completed',
                 'content': [{'type': 'output_text', 'text': 'CONTINUED_OK', 'annotations': []}]}
-        send('response.output_item.added', output_index=0, item=item)
-        send('response.output_item.done', output_index=0, item=item)
-        send('response.completed', response={**response, 'status': 'completed', 'output': [item],
+        output = []
+        if type(self).sent_tool and item.get('type') == 'message' and getattr(type(self), 'reasoning_summary', None):
+            reasoning = {'id': 'reasoning_fixture', 'type': 'reasoning', 'summary': [{'type': 'summary_text', 'text': type(self).reasoning_summary}]}
+            send('response.output_item.added', output_index=0, item=reasoning)
+            send('response.output_item.done', output_index=0, item=reasoning)
+            output.append(reasoning)
+        output.append(item)
+        send('response.output_item.added', output_index=len(output) - 1, item=item)
+        send('response.output_item.done', output_index=len(output) - 1, item=item)
+        send('response.completed', response={**response, 'status': 'completed', 'output': output,
             'usage': {'input_tokens': 1, 'output_tokens': 1, 'total_tokens': 2}})
 
     def log_message(self, *_args):

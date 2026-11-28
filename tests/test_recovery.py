@@ -100,6 +100,74 @@ class RecoveryTests(unittest.TestCase):
             self.bridge.flush_handoff_context()
             self.assertEqual(client.request.call_count, 2)
 
+    def test_late_assignment_initializes_task_server_context_without_model_turn(self):
+        from agentteams_codex.task_protocol import CONTEXT_ENV
+        event = {"shared_key": "late", "event_id": "$late", "room_id": "!task:test"}
+        work = {"kind": "task", "task_id": "t1", "team_id": "team"}
+        self.bridge.workspace = self.bridge.home
+        self.bridge.plugin = self.bridge.home
+        self.bridge.runtime_path = self.bridge.home / "runtime.yaml"
+        self.bridge.managed = Mock()
+        self.bridge.managed.matrix.recovery = self.recovery
+        self.bridge.managed.matrix.native_input.return_value = {"input": {
+            "intent": "task_notification", "work": work, "room_id": "!task:test",
+            "event_id": "$late", "input": {"sender": "@leader:test"}}}
+        self.bridge.managed.classify.return_value = ("task_notification", "t1")
+        self.bridge.journal.data["events"]["recovery:team/t1:2"] = {"status": "completed"}
+        config = {"member": {"role": "worker"}, "desired": {"model": {"gatewayKey": "fixture"}}}
+        with patch("agentteams_codex.bridge.read_runtime", return_value=config), \
+                patch("agentteams_codex.bridge.prepare", return_value=("fixture", "instructions")), \
+                patch("agentteams_codex.bridge.task_thread", return_value=("native-thread", self.view)), \
+                patch("agentteams_codex.bridge.rollout_digest", return_value=None), \
+                patch("agentteams_codex.bridge.Client") as factory:
+            client = factory.return_value.__enter__.return_value
+            client.open_thread.return_value = {"id": "native-thread"}
+            self.assertTrue(self.bridge.attach_late_assignment(event))
+            context = json.loads(factory.call_args.kwargs["env"][CONTEXT_ENV])
+            self.assertEqual(context, {"role": "worker", "sourceEvent": "$late", "sourceRoom": "!task:test", "sources": []})
+            self.bridge.managed.commit_for_turn.assert_called_once_with(client, "native-thread", {"room_id": "!task:test", "recovery": work})
+            client.start.assert_not_called()
+            self.bridge.run_turn.assert_not_called()
+
+    def test_task_stdio_survives_missing_scope_and_accepts_later_context(self):
+        import io
+        from types import SimpleNamespace
+        from agentteams_codex import task_protocol
+        scope = self.bridge.home / "late-scope.json"
+        def lines():
+            yield json.dumps({"id": 1, "method": "initialize"})
+            yield json.dumps({"id": 2, "method": "tools/list"})
+            scope.write_text(json.dumps({"context": {"role": "worker", "sourceEvent": "$late", "sources": []}}))
+            yield json.dumps({"id": 3, "method": "tools/list"})
+        output = io.StringIO()
+        env = {"AGENTTEAMS_PLUGIN_DIR": str(self.bridge.home), "AGENTTEAMS_CODEX_NATIVE_SCOPE": str(scope)}
+        with patch.dict(os.environ, env, clear=True), \
+                patch.object(task_protocol.sys, "stdin", lines()), \
+                patch.object(task_protocol.sys, "stdout", output), \
+                patch.object(task_protocol, "common", return_value=SimpleNamespace(schema=lambda role: {"description": "Task", "inputSchema": {}})), \
+                patch.object(task_protocol.importlib, "import_module", return_value=SimpleNamespace(list_tools=lambda: [])):
+            task_protocol.main()
+        replies = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(replies[0]["id"], 1)
+        self.assertIn("serverInfo", replies[0]["result"])
+        self.assertEqual(replies[1]["error"]["code"], -32000)
+        self.assertEqual(replies[2]["result"]["tools"][0]["name"], "task")
+
+    def test_initial_recovery_disconnect_does_not_exit_bridge(self):
+        import threading
+        from task_recovery import RecoveryUnavailable
+        self.bridge.stop = threading.Event()
+        self.bridge.stop.wait = Mock(return_value=False)
+        self.bridge.managed = self.bridge.manager_receipts = None
+        self.bridge.poll = Mock()
+        self.bridge.recover_tasks = Mock(side_effect=[RecoveryUnavailable("Controller restarting"), None])
+        with patch("agentteams_codex.bridge.threading.Thread") as factory:
+            factory.return_value.start.side_effect = self.bridge.stop.set
+            self.bridge.run()
+        self.assertEqual(self.bridge.recover_tasks.call_count, 2)
+        factory.return_value.start.assert_called_once()
+        self.bridge.run_turn.assert_not_called()
+
     def test_confirmed_inner_delivery_does_not_repeat_outer_reply_preparation(self):
         event = {'room_id': '!task:test', 'event_id': '$source', 'recovery': {
             'task_id': 't1', 'team_id': 'team', 'spec': 'requirements',
@@ -271,6 +339,33 @@ class RecoveryTests(unittest.TestCase):
         self.bridge.process_recovered_task("recovery:t1", record)
         self.assertEqual(record["status"], "superseded")
         self.bridge.run_turn.assert_not_called()
+
+    def test_interrupted_running_turn_returns_to_authoritative_recovery(self):
+        identity = {'task_id': 't1', 'team_id': 'team', 'spec': 'Three steps',
+                    **{k: self.task['execution'][k] for k in ('instance_id', 'generation', 'process_id')}}
+        record = {'event': {'room_id': '!task:test', 'recovery': identity}, 'status': 'queued'}
+        def interrupted(*args):
+            record['status'] = 'running'
+            raise RuntimeError('native admission unavailable during Core restart')
+        self.bridge.run_turn.side_effect = interrupted
+        with patch('agentteams_codex.bridge.task_thread', return_value=('existing-thread', self.view)):
+            with self.assertRaisesRegex(RuntimeError, 'Core restart'):
+                self.bridge.process_recovered_task('recovery:team/t1:2', record)
+        self.recovery.release_failed_turn.return_value = True
+        self.bridge.process_recovered_task('recovery:team/t1:2', record)
+        self.recovery.release_failed_turn.assert_called_once_with(identity)
+        self.bridge.run_turn.assert_called_once()  # A new claim must precede another native run.
+        self.recovery.prepare_reply.assert_not_called()
+
+    def test_unverified_interrupted_turn_stays_fenced_without_replay(self):
+        identity = {'task_id': 't1', 'team_id': 'team',
+                    **{k: self.task['execution'][k] for k in ('instance_id', 'generation', 'process_id')}}
+        record = {'event': {'room_id': '!task:test', 'recovery': identity}, 'status': 'running'}
+        self.recovery.release_failed_turn.return_value = False
+        self.bridge.process_recovered_task('recovery:team/t1:2', record)
+        self.recovery.release_failed_turn.assert_called_once_with(identity)
+        self.bridge.run_turn.assert_not_called()
+        self.assertEqual(record['status'], 'running')
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 The Responses endpoint is a deterministic fixture; tools run in this disposable container.
 """
 import json
+from contextlib import nullcontext
 import os
 from pathlib import Path
 import queue
@@ -25,7 +26,7 @@ from agentteams_codex.config import read_runtime
 action = sys.argv[1] if len(sys.argv) > 1 else 'steer'
 assert action in {'stop', 'steer'}
 role = sys.argv[2] if len(sys.argv) > 2 else 'worker'
-assert role in {'worker', 'leader'}
+assert role in {'worker', 'leader', 'manager'}
 
 
 with tempfile.TemporaryDirectory() as temporary:
@@ -79,12 +80,14 @@ with tempfile.TemporaryDirectory() as temporary:
         return {'joined': {'@agent:test': {}, '@human:test': {}}}
     bridge.matrix.request.side_effect = matrix_request
     bridge.matrix.send_content.return_value = '$response'
-    bridge.managed = ManagedMatrix(bridge, lambda *_args: [])
-    bridge.managed.joined = {'!dm:test'}
+    bridge.managed = ManagedMatrix(bridge, lambda *_args: []) if role != 'manager' else None
+    if bridge.managed:
+        bridge.managed.joined = {'!dm:test'}
     bridge.matrix.send_text.return_value = '$response'
-    event = {'event_id': '$original', 'sender': '@human:test', 'room_id': '!dm:test', 'body': 'ORIGINAL_TASK', 'kind': 'text'}
-    event['shared_key'] = bridge.managed.matrix.accept(event['room_id'], event['event_id'],
-        {'sender': event['sender'], 'content': {'msgtype': 'm.text', 'body': event['body']}}, 'message')
+    event = {'event_id': '$original', 'sender': '@agent:test' if role == 'manager' else '@human:test', 'room_id': '!dm:test', 'body': 'ORIGINAL_TASK', 'kind': 'text'}
+    if bridge.managed:
+        event['shared_key'] = bridge.managed.matrix.accept(event['room_id'], event['event_id'],
+            {'sender': event['sender'], 'content': {'msgtype': 'm.text', 'body': event['body']}}, 'message')
     bridge.journal.ingest([event], 'cursor')
     errors = []
     def run():
@@ -93,7 +96,14 @@ with tempfile.TemporaryDirectory() as temporary:
         except Exception as error:
             errors.append(error)
     try:
-        with patch('agentteams_codex.bridge.prepare', return_value=('test-model', 'Use tools for the request.')):
+        # This native control fixture has no Task inputs. Actual Manager input
+        # discovery is covered separately through the Dashboard/Controller.
+        def prepared_manager(_plugin, _role, source):
+            return {'role': 'manager', 'sourceEvent': source['event_id'],
+                    'sourceRoom': source['room_id'], 'sources': []}, '', None
+        prepared = patch('agentteams_codex.bridge.prepare_turn', side_effect=prepared_manager
+        ) if role == 'manager' else nullcontext()
+        with patch('agentteams_codex.bridge.prepare', return_value=('test-model', 'Use tools for the request.')), prepared:
             thread = threading.Thread(target=run)
             thread.start()
             deadline = time.monotonic() + 30
@@ -106,9 +116,13 @@ with tempfile.TemporaryDirectory() as temporary:
             assert bridge.journal.data['events']['$original'].get('input_checkpointed'), 'Native input was not checkpointed while tools were running'
             control = {**event, 'event_id': '$supplement', 'body': 'SUPPLEMENT_HANGZHOU',
                 'execution_control': {'action': action, 'agent_id': '@agent:test', 'run_id': '$original'}}
-            control['shared_key'] = bridge.managed.matrix.accept(control['room_id'], control['event_id'],
-                {'sender': control['sender'], 'content': {'msgtype': 'm.text', 'body': control['body']}}, 'message')
-            assert bridge.managed.control(control)
+            control['sender'] = '@human:test'
+            if bridge.managed:
+                control['shared_key'] = bridge.managed.matrix.accept(control['room_id'], control['event_id'],
+                    {'sender': control['sender'], 'content': {'msgtype': 'm.text', 'body': control['body']}}, 'message')
+                assert bridge.managed.control(control)
+            else:
+                assert bridge.handle_control(control)
             if action == 'steer':
                 deadline = time.monotonic() + 10
                 while bridge.journal.data['events']['$supplement']['status'] != 'completed' and time.monotonic() < deadline:
@@ -121,15 +135,18 @@ with tempfile.TemporaryDirectory() as temporary:
             thread.join(15)
             assert not thread.is_alive(), 'native turn did not settle'
             assert not errors, errors
-            assert controller.claims == ['$original', '$supplement'], controller.claims
-            assert controller.saved_sessions, 'No actual native session checkpoint was published'
-            execution = controller.inputs[event['shared_key']]['execution']
-            cp = execution['checkpoint']
-            if action == 'stop':
-                assert execution['state'] == 'cancelled' and not cp.get('result'), execution
-                assert bridge.journal.data['events']['$original']['status'] == 'completed'
+            if bridge.managed:
+                assert controller.claims == ['$original', '$supplement'], controller.claims
+                assert controller.saved_sessions, 'No actual native session checkpoint was published'
+                execution = controller.inputs[event['shared_key']]['execution']
+                cp = execution['checkpoint']
+                if action == 'stop':
+                    assert execution['state'] == 'cancelled' and not cp.get('result'), execution
+                    assert bridge.journal.data['events']['$original']['status'] == 'completed'
+                else:
+                    assert cp['delivery'] == 'delivered', cp
             else:
-                assert cp['delivery'] == 'delivered', cp
+                assert not controller.claims, 'Manager must not fabricate a Worker execution'
             pid = int(Model.pidfile.read_text())
             try:
                 os.kill(pid, 0)
@@ -144,15 +161,17 @@ with tempfile.TemporaryDirectory() as temporary:
                 assert bridge.journal.data['events']['$supplement']['status'] == 'completed'
                 assert bridge.journal.data['events']['$original']['turn_id']
                 assert any('ORIGINAL_TASK' in json.dumps(r) and 'SUPPLEMENT_HANGZHOU' in json.dumps(r) for r in Model.requests)
-                print(f'PASS: managed {role} claim + native Codex steer kept the turn and tool alive, and the next inference received the supplement')
+                print(f'PASS: {role} native Codex steer kept the turn and tool alive, and the next inference received the supplement')
             else:
                 assert not Model.marker.exists()
                 assert statuses == ['running', 'stopping', 'stopped'], statuses
             if action == 'stop':
                 assert '$supplement' not in bridge.journal.data['events']
                 followup = {**event, 'event_id': '$followup', 'body': 'SUPPLEMENT_HANGZHOU'}
-                followup['shared_key'] = bridge.managed.matrix.accept(followup['room_id'], followup['event_id'],
-                    {'sender': followup['sender'], 'content': {'msgtype': 'm.text', 'body': followup['body']}}, 'message')
+                followup['sender'] = '@human:test'
+                if bridge.managed:
+                    followup['shared_key'] = bridge.managed.matrix.accept(followup['room_id'], followup['event_id'],
+                        {'sender': followup['sender'], 'content': {'msgtype': 'm.text', 'body': followup['body']}}, 'message')
                 bridge.journal.ingest([followup], 'next')
                 record = bridge.journal.data['events']['$followup']
                 assert record['status'] == 'queued', record
