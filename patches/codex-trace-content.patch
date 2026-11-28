@@ -171,14 +171,22 @@ diff --git a/codex-rs/otel/src/provider.rs b/codex-rs/otel/src/provider.rs
 index 305b09e..ce38d48 100644
 --- a/codex-rs/otel/src/provider.rs
 +++ b/codex-rs/otel/src/provider.rs
-@@ -186,7 +186,10 @@ impl OtelProvider {
+@@ -186,7 +186,18 @@ impl OtelProvider {
      }
  
      pub fn trace_export_filter(meta: &tracing::Metadata<'_>) -> bool {
 -        meta.is_span() || is_trace_safe_target(meta.target())
-+        // Task telemetry retains semantic model/tool spans. SDK diagnostics
-+        // (HTTP polling, config snapshots, persistence) remain local tracing.
-+        (meta.is_span() && meta.fields().field("langfuse.observation.type").is_some())
++        // Keep the parent spans that carry the submitted W3C context into
++        // native model and tool spans. Other SDK diagnostics stay local.
++        let task_boundary = matches!(
++            (meta.target(), meta.name()),
++            ("codex_core::session::handlers", "submission_dispatch")
++                | ("codex_core::tasks", "turn" | "session_task.run")
++                | ("codex_core::tasks::regular", "run_turn")
++                | ("codex_core::mcp_tool_call", "mcp.tools.call")
++        );
++        (meta.is_span()
++            && (task_boundary || meta.fields().field("langfuse.observation.type").is_some()))
 +            || is_trace_safe_target(meta.target())
      }
  

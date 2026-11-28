@@ -110,7 +110,7 @@ def main():
         threading.Thread(target=server.serve_forever, daemon=True).start()
         collector = ThreadingHTTPServer(('127.0.0.1', 0), Collector)
         threading.Thread(target=collector.serve_forever, daemon=True).start()
-        os.environ.update(AGENTTEAMS_OTEL_ENABLED='true', OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=f'http://127.0.0.1:{collector.server_port}/v1/traces', OTEL_EXPORTER_OTLP_TRACES_HEADERS='')
+        os.environ.update(AGENTTEAMS_OTEL_ENABLED='true', AGENTTEAMS_OTEL_CAPTURE_CONTENT='false', OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=f'http://127.0.0.1:{collector.server_port}/v1/traces', OTEL_EXPORTER_OTLP_TRACES_HEADERS='')
         config = {'member': {'role': 'manager', 'runtime': 'codex', 'runtimeName': 'fixture-manager'},
                   'desired': {'model': {'model': 'test-model', 'gatewayUrl': f'http://127.0.0.1:{server.server_port}'}}}
         plugin = source / 'plugins/teamharness'

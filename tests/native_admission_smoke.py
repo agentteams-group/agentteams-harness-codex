@@ -80,7 +80,7 @@ def main():
             scope = Scope(home, plugin, context)
             config = {'member': {'role': 'manager', 'runtime': 'codex'}, 'desired': {'model': {
                 'model': 'own-model', 'gatewayUrl': f'http://127.0.0.1:{servers[1].server_port}'}}}
-            os.environ.update(AGENTTEAMS_OTEL_ENABLED='true',
+            os.environ.update(AGENTTEAMS_OTEL_ENABLED='true', AGENTTEAMS_OTEL_CAPTURE_CONTENT='false',
                 OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=f'http://127.0.0.1:{servers[2].server_port}/v1/traces',
                 OTEL_EXPORTER_OTLP_TRACES_HEADERS='')
             model, instructions = prepare(config, home, workspace, plugin,
