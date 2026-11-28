@@ -118,7 +118,7 @@ def test_native_stdio_uses_the_real_common_cli_boundary_and_rejects_forged_sourc
         input=''.join(json.dumps(row) + '\n' for row in requests), capture_output=True, text=True,
         env={**os.environ, 'PATH': str(tmp_path) + os.pathsep + os.environ['PATH'],
              'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src'),
-             'AGENTTEAMS_PLUGIN_DIR': str(source / 'plugins/teamharness'),
+             'AGENTTEAMS_PLUGIN_DIR': os.environ.get('AGENTTEAMS_PLUGIN_DIR', str(source / 'plugins/teamharness')),
              task_protocol.CONTEXT_ENV: json.dumps(context)})
     assert result.returncode == 0, result.stderr
     rows = [json.loads(line) for line in result.stdout.splitlines()]
@@ -238,7 +238,7 @@ def test_coordination_admission_sends_the_raw_matrix_id_over_http(tmp_path, monk
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     import threading
     source = Path(os.environ['AT_SOURCE']).resolve()
-    phase = task_protocol.common(source / 'plugins/teamharness', 'phase_recovery')
+    phase = task_protocol.common(os.environ.get('AGENTTEAMS_PLUGIN_DIR', str(source / 'plugins/teamharness')), 'phase_recovery')
     received = []
     class Admission(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -355,7 +355,7 @@ def test_native_stdio_reads_large_task_context_from_existing_private_scope(tmp_p
                'retained': '原始记录' * 20000}
     scope.write_text(json.dumps({'context': context}))
     env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src'),
-           'AGENTTEAMS_PLUGIN_DIR': str(source / 'plugins/teamharness'),
+           'AGENTTEAMS_PLUGIN_DIR': os.environ.get('AGENTTEAMS_PLUGIN_DIR', str(source / 'plugins/teamharness')),
            'AGENTTEAMS_CODEX_NATIVE_SCOPE': str(scope)}
     env.pop(task_protocol.CONTEXT_ENV, None)
     result = subprocess.run([sys.executable, '-m', 'agentteams_codex.task_protocol'],
